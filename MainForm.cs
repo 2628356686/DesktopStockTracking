@@ -107,11 +107,11 @@ public sealed class MainForm : Form
         else if(_settings.NoteDisplayMode==1&&!string.IsNullOrWhiteSpace(stock.Note))name+=stock.Note;
         var parts=new List<string>();
         if(code.Length>0)parts.Add(code);if(name.Length>0)parts.Add(name);
-        if(_settings.PriceDisplayMode!=1){var price=q.Current.ToString("0.00");if(_settings.PriceDisplayMode==2)price+=FormatSigned(q.Change,_settings.RiseSymbol,_settings.FallSymbol);parts.Add(price);}
-        if(_settings.ChangeDisplayMode!=2)parts.Add(FormatSigned(q.ChangePercent,_settings.RiseSymbol,_settings.FallSymbol)+_settings.PercentSymbol);
+        if(_settings.PriceDisplayMode!=1){var price=q.Current.ToString("0.00");if(_settings.PriceDisplayMode==2)price+=FormatSigned(q.Change,"+","-");parts.Add(price);}
+        if(_settings.ChangeDisplayMode!=2)parts.Add(FormatSigned(q.ChangePercent,"+","-")+"%");
         if(_settings.ShowSealVolume&&q.SealedVolume>0)parts.Add("封"+FormatSealVolume(q.SealedVolume));
         if(_settings.ShowVolume)parts.Add((q.Volume/10000m).ToString("0.00")+"万");
-        if(_settings.ShowProfit&&stock.CostPrice is{}cost&&stock.Position is{}pos){var profit=(q.Current-cost)*pos;parts.Add("盈亏"+FormatSigned(profit,_settings.RiseSymbol,_settings.FallSymbol));}
+        if(_settings.ShowProfit&&stock.CostPrice is{}cost&&stock.Position is{}pos){var profit=(q.Current-cost)*pos;parts.Add("盈亏"+FormatSigned(profit,"+","-"));}
         label.Text=string.Join(_settings.AlignText?"  ":" ",parts);
         label.ForeColor=_settings.ChangeDisplayMode==1?Color.FromArgb(_settings.FlatColorArgb):q.Change>0?Color.FromArgb(_settings.RiseColorArgb):q.Change<0?Color.FromArgb(_settings.FallColorArgb):Color.FromArgb(_settings.FlatColorArgb);
     }

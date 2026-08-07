@@ -17,9 +17,6 @@ public sealed class AppSettings
     public int PriceDisplayMode { get; set; } = 0;
     public int ChangeDisplayMode { get; set; } = 0;
     public int NoteDisplayMode { get; set; } = 0;
-    public string RiseSymbol { get; set; } = "+";
-    public string FallSymbol { get; set; } = "-";
-    public string PercentSymbol { get; set; } = "%";
     public bool EnableChart { get; set; } = true;
     public string ChartType { get; set; } = "分时图";
     public bool ShowCode { get; set; } = true;

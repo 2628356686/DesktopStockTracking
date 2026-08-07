@@ -25,9 +25,6 @@ public sealed class SettingsForm : Form
     private readonly CheckBox _quickChart = new() { Text = "显示快速切换列表", AutoSize = true };
     private readonly CheckBox _advancedChart = new() { Text = "高级筛选", AutoSize = true };
     private readonly ComboBox _noteMode = Combo("不显示", "附加", "替换");
-    private readonly TextBox _riseSymbol = new() { Text = "+", MaxLength = 1, TextAlign = HorizontalAlignment.Center };
-    private readonly TextBox _fallSymbol = new() { Text = "-", MaxLength = 1, TextAlign = HorizontalAlignment.Center };
-    private readonly TextBox _percentSymbol = new() { Text = "%", MaxLength = 1, TextAlign = HorizontalAlignment.Center };
     private readonly Label _sample = new() { Text = "sh600000  浦发银行  10.00  +1.20%", TextAlign = ContentAlignment.MiddleCenter };
     private readonly ComboBox _fontSize = Combo("9", "10", "11", "12", "13", "14", "16", "18", "20");
     private readonly ComboBox _spacing = Combo("无", "极窄", "窄", "中等", "较宽", "宽");
@@ -59,14 +56,22 @@ public sealed class SettingsForm : Form
     {
         Result = Clone(source);
         Text = "设置"; StartPosition = FormStartPosition.CenterScreen; FormBorderStyle = FormBorderStyle.Sizable;
-        MaximizeBox = true; MinimizeBox = false; ClientSize = new Size(355, 349); MinimumSize = new Size(355, 349);
+        MaximizeBox = true; MinimizeBox = false; ClientSize = new Size(600, 500); MinimumSize = new Size(355, 349);
         Font = new Font("宋体", 9);
-        var tabs = new TabControl { Location = new Point(12, 12), Size = new Size(331, 289), Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right };
+        var tabs = new TabControl();
         tabs.TabPages.Add(BuildStocksPage()); tabs.TabPages.Add(BuildDisplayPage()); tabs.TabPages.Add(BuildAdvancedPage()); tabs.TabPages.Add(BuildChartPage()); tabs.TabPages.Add(BuildOtherPage());
-        var ok = new Button { Text = "确定", Location = new Point(175, 310), Size = new Size(80, 29), Anchor = AnchorStyles.Bottom | AnchorStyles.Right, FlatStyle = FlatStyle.System, UseVisualStyleBackColor = true };
-        var cancel = new Button { Text = "取消", Location = new Point(261, 310), Size = new Size(80, 29), Anchor = AnchorStyles.Bottom | AnchorStyles.Right, FlatStyle = FlatStyle.System, UseVisualStyleBackColor = true, DialogResult = DialogResult.Cancel };
+        var ok = new Button { Text = "确定", Size = new Size(80, 29), FlatStyle = FlatStyle.System, UseVisualStyleBackColor = true };
+        var cancel = new Button { Text = "取消", Size = new Size(80, 29), FlatStyle = FlatStyle.System, UseVisualStyleBackColor = true, DialogResult = DialogResult.Cancel };
         ok.Click += (_, _) => { if (ReadControls()) { DialogResult = DialogResult.OK; Close(); } };
         Controls.Add(tabs); Controls.Add(ok); Controls.Add(cancel); AcceptButton = ok; CancelButton = cancel;
+        void LayoutControls()
+        {
+            tabs.SetBounds(12, 12, Math.Max(100, ClientSize.Width - 24), Math.Max(100, ClientSize.Height - 60));
+            cancel.Location = new Point(ClientSize.Width - cancel.Width - 14, ClientSize.Height - cancel.Height - 10);
+            ok.Location = new Point(cancel.Left - ok.Width - 6, cancel.Top);
+        }
+        ClientSizeChanged += (_, _) => LayoutControls();
+        LayoutControls();
         LoadControls(source);
     }
 
@@ -103,49 +108,72 @@ public sealed class SettingsForm : Form
         var code=NewGroup("股票代码");var codeHost=Host();SetupWide(_codeMode);codeHost.Controls.Add(_codeMode);code.Controls.Add(codeHost);
         var name=NewGroup("股票名称");var nameTable=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(8,8,8,5),ColumnCount=2,RowCount=2};nameTable.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,68));nameTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));nameTable.RowStyles.Add(new RowStyle(SizeType.Percent,50));nameTable.RowStyles.Add(new RowStyle(SizeType.Percent,50));_nameMode.Dock=DockStyle.Fill;_nameMode.Margin=new Padding(0,2,0,3);nameTable.Controls.Add(_nameMode,0,0);nameTable.SetColumnSpan(_nameMode,2);nameTable.Controls.Add(new Label{Text="显示备注：",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleRight},0,1);_noteMode.Dock=DockStyle.Fill;_noteMode.Margin=new Padding(0,2,0,2);nameTable.Controls.Add(_noteMode,1,1);name.Controls.Add(nameTable);
         var price=NewGroup("现价及涨跌额");var priceHost=Host();SetupWide(_priceMode);priceHost.Controls.Add(_priceMode);price.Controls.Add(priceHost);
-        var change=NewGroup("涨跌幅");var changeTable=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(8,6,8,4),ColumnCount=4,RowCount=3};changeTable.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,68));changeTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,25));changeTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,25));changeTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,50));changeTable.RowStyles.Add(new RowStyle(SizeType.Percent,34));changeTable.RowStyles.Add(new RowStyle(SizeType.Percent,33));changeTable.RowStyles.Add(new RowStyle(SizeType.Percent,33));_changeMode.Dock=DockStyle.Fill;_changeMode.Margin=new Padding(0,0,0,2);changeTable.Controls.Add(_changeMode,0,0);changeTable.SetColumnSpan(_changeMode,4);_sealVolume.Dock=DockStyle.Fill;_sealVolume.Margin=Padding.Empty;_sealVolume.Font=new Font("宋体",7.5f);changeTable.Controls.Add(_sealVolume,0,1);changeTable.SetColumnSpan(_sealVolume,4);changeTable.Controls.Add(new Label{Text="涨跌符号：",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleRight},0,2);SetupSymbol(_riseSymbol);SetupSymbol(_fallSymbol);SetupSymbol(_percentSymbol);changeTable.Controls.Add(_riseSymbol,1,2);changeTable.Controls.Add(_fallSymbol,2,2);changeTable.Controls.Add(_percentSymbol,3,2);change.Controls.Add(changeTable);
+        var change=NewGroup("涨跌幅");var changeTable=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(8,8,8,6),ColumnCount=1,RowCount=2};changeTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));changeTable.RowStyles.Add(new RowStyle(SizeType.Percent,55));changeTable.RowStyles.Add(new RowStyle(SizeType.Percent,45));_changeMode.Dock=DockStyle.Fill;_changeMode.Margin=new Padding(0,2,0,4);changeTable.Controls.Add(_changeMode,0,0);_sealVolume.Dock=DockStyle.None;_sealVolume.Anchor=AnchorStyles.Left;_sealVolume.Margin=new Padding(2,2,0,2);changeTable.Controls.Add(_sealVolume,0,1);change.Controls.Add(changeTable);
         layout.Controls.Add(code,0,0);layout.Controls.Add(name,1,0);layout.Controls.Add(price,0,1);layout.Controls.Add(change,1,1);
         var samplePanel=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=2,Margin=new Padding(8,0,8,0)};samplePanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,48));samplePanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));samplePanel.Controls.Add(new Label{Text="示例：",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleRight},0,0);_sample.Dock=DockStyle.Fill;samplePanel.Controls.Add(_sample,1,0);layout.Controls.Add(samplePanel,0,2);layout.SetColumnSpan(samplePanel,2);
-        foreach(var box in new[]{_codeMode,_nameMode,_priceMode,_changeMode,_noteMode})box.SelectedIndexChanged+=(_,_)=>UpdateSample(); foreach(var text in new[]{_riseSymbol,_fallSymbol,_percentSymbol})text.TextChanged+=(_,_)=>UpdateSample(); _sealVolume.CheckedChanged+=(_,_)=>UpdateSample();
-        _changeMode.SelectedIndexChanged+=(_,_)=>{var enabled=_changeMode.SelectedIndex!=2;_sealVolume.Enabled=enabled;_riseSymbol.Enabled=enabled;_fallSymbol.Enabled=enabled;_percentSymbol.Enabled=enabled;if(_changeMode.SelectedIndex==3)ChooseCustomColors();};
+        foreach(var box in new[]{_codeMode,_nameMode,_priceMode,_changeMode,_noteMode})box.SelectedIndexChanged+=(_,_)=>UpdateSample(); _sealVolume.CheckedChanged+=(_,_)=>UpdateSample();
+        _changeMode.SelectedIndexChanged+=(_,_)=>{_sealVolume.Enabled=_changeMode.SelectedIndex!=2;if(_changeMode.SelectedIndex==3)ChooseCustomColors();};
         page.Controls.Add(layout);return page;
         static GroupBox NewGroup(string text)=>new(){Text=text,Dock=DockStyle.Fill,Margin=new Padding(7,5,7,5)};
         static Panel Host()=>new(){Dock=DockStyle.Fill,Padding=new Padding(10,20,10,10)};
         static void SetupWide(ComboBox box){box.Dock=DockStyle.Top;box.Margin=Padding.Empty;}
-        static void SetupSymbol(TextBox box){box.Dock=DockStyle.Fill;box.Margin=new Padding(2,1,2,1);}
     }
 
     private TabPage BuildAdvancedPage()
     {
         var page=Page("高级");
-        var table=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(18,8,18,0),ColumnCount=3,RowCount=9};
-        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,84));
-        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,150));
-        table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
-        for(var i=0;i<8;i++)table.RowStyles.Add(new RowStyle(SizeType.Percent,11.5f));
-        table.RowStyles.Add(new RowStyle(SizeType.Percent,8f));
+        var table=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(18,12,18,8),ColumnCount=3,RowCount=9};
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,115));
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,38));
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,62));
+        for(var i=0;i<8;i++)table.RowStyles.Add(new RowStyle(SizeType.Absolute,42));
+        table.RowStyles.Add(new RowStyle(SizeType.Absolute,52));
         AddRow(0,"文字大小：",_fontSize,"宋体；常规");
         AddRow(1,"行距：",_spacing,"");
         AddLabel("背景颜色：",2);var colorHost=new Panel{Dock=DockStyle.Fill,Margin=Padding.Empty};_background.Location=new Point(0,2);_background.Size=new Size(24,24);colorHost.Controls.Add(_background);table.Controls.Add(colorHost,1,2);table.Controls.Add(new Label{Text="白色为透明背景",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleLeft},2,2);
         AddRow(3,"透明度：",_opacity,"数值越小越透明");
         AddRow(4,"刷新间隔：",_refresh,"可设置 1–10 秒");
-        var shortcut=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=2,Margin=Padding.Empty};shortcut.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,48));shortcut.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));_boss.Dock=DockStyle.Fill;shortcut.Controls.Add(_boss,0,0);_bossShortcut.Dock=DockStyle.Fill;_bossShortcut.Margin=new Padding(0,3,0,3);shortcut.Controls.Add(_bossShortcut,1,0);AddLabel("显示/隐藏快捷键：",5);table.Controls.Add(shortcut,1,5);table.SetColumnSpan(shortcut,2);
-        var bossActions=new FlowLayoutPanel{Dock=DockStyle.Fill,FlowDirection=FlowDirection.LeftToRight,WrapContents=false,Margin=Padding.Empty};bossActions.Controls.Add(new Label{Text="按下快捷键后：",AutoSize=true,Margin=new Padding(0,6,8,0)});bossActions.Controls.Add(_bossHide);bossActions.Controls.Add(_bossExit);table.Controls.Add(bossActions,1,6);table.SetColumnSpan(bossActions,2);
-        var common=new FlowLayoutPanel{Dock=DockStyle.Fill,FlowDirection=FlowDirection.LeftToRight,WrapContents=false,Margin=Padding.Empty};common.Controls.Add(_topMost);common.Controls.Add(_tray);table.Controls.Add(common,1,7);table.SetColumnSpan(common,2);
+        var shortcut=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=2,Margin=Padding.Empty};shortcut.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,48));shortcut.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));_boss.Dock=DockStyle.Fill;shortcut.Controls.Add(_boss,0,0);_bossShortcut.Dock=DockStyle.Fill;_bossShortcut.MaximumSize=new Size(260,0);_bossShortcut.Margin=new Padding(0,7,0,7);shortcut.Controls.Add(_bossShortcut,1,0);AddLabel("显示/隐藏快捷键：",5);table.Controls.Add(shortcut,1,5);table.SetColumnSpan(shortcut,2);
+        var bossActions=new FlowLayoutPanel{Dock=DockStyle.Fill,FlowDirection=FlowDirection.LeftToRight,WrapContents=false,Margin=new Padding(0,0,0,0),Padding=new Padding(0,5,0,0)};bossActions.Controls.Add(new Label{Text="按下快捷键后：",AutoSize=true,Margin=new Padding(0,5,10,0)});bossActions.Controls.Add(_bossHide);bossActions.Controls.Add(_bossExit);table.Controls.Add(bossActions,1,6);table.SetColumnSpan(bossActions,2);
+        var common=new FlowLayoutPanel{Dock=DockStyle.Fill,FlowDirection=FlowDirection.LeftToRight,WrapContents=false,Margin=Padding.Empty,Padding=new Padding(0,6,0,0)};_topMost.Margin=new Padding(0,4,18,0);_tray.Margin=new Padding(0,4,0,0);common.Controls.Add(_topMost);common.Controls.Add(_tray);table.Controls.Add(common,1,7);table.SetColumnSpan(common,2);
         var reset=new Button{Text="一键重置(&R)",Size=new Size(120,26),Anchor=AnchorStyles.None,UseVisualStyleBackColor=true};reset.Click+=(_,_)=>LoadControls(new AppSettings());table.Controls.Add(reset,0,8);table.SetColumnSpan(reset,3);
         _boss.CheckedChanged+=(_,_)=>{_bossHide.Enabled=_boss.Checked;_bossExit.Enabled=_boss.Checked;_bossShortcut.Enabled=_boss.Checked;}; _bossShortcut.Enter+=(_,_)=>_bossShortcut.SelectAll(); _bossShortcut.MouseDown+=(_,_)=>_bossShortcut.SelectAll(); _bossShortcut.KeyDown+=CaptureShortcut; _tips.SetToolTip(_bossShortcut,"点击后直接按组合键；Backspace 或 Delete 清空");
         _background.Click+=ChooseBackground;_tips.SetToolTip(_boss,"开启后，按下指定快捷键程序可以自动隐藏、退出");page.Controls.Add(table);return page;
-        void AddLabel(string text,int row){var label=new Label{Text=text,Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleRight,AutoEllipsis=false,Margin=new Padding(0,0,10,0)};table.Controls.Add(label,0,row);}
-        void AddRow(int row,string labelText,Control input,string note){AddLabel(labelText,row);input.Dock=DockStyle.Fill;input.Margin=new Padding(0,3,10,3);table.Controls.Add(input,1,row);if(note.Length>0)table.Controls.Add(new Label{Text=note,Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleLeft,AutoEllipsis=true},2,row);}
+        void AddLabel(string text,int row){var label=new Label{Text=text,Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleRight,AutoEllipsis=true,Margin=new Padding(0,0,10,0)};table.Controls.Add(label,0,row);}
+        void AddRow(int row,string labelText,Control input,string note){AddLabel(labelText,row);input.Dock=DockStyle.Fill;input.Margin=new Padding(0,8,10,8);table.Controls.Add(input,1,row);if(note.Length>0)table.Controls.Add(new Label{Text=note,Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleLeft,AutoEllipsis=true,Margin=new Padding(0)},2,row);}
     }
 
     private TabPage BuildChartPage()
     {
         var page=Page("股价图");
-        var open=Box("                                         ",21,15,288,59); open.Anchor=AnchorStyles.Top|AnchorStyles.Left|AnchorStyles.Right; Place(_chart,16,-1,108,16); Place(_details,158,-1,96,16); _details.Anchor=AnchorStyles.Top|AnchorStyles.Right; Place(_singleClick,15,28,107,16); _singleClick.MaximumSize=Size.Empty; Place(_doubleClick,158,28,107,16); _doubleClick.MaximumSize=Size.Empty; _doubleClick.Anchor=AnchorStyles.Top|AnchorStyles.Right; open.Controls.Add(_chart);open.Controls.Add(_details);open.Controls.Add(_singleClick);open.Controls.Add(_doubleClick);
-        var content=Box("股价图显示内容",21,86,288,72); content.Anchor=AnchorStyles.Top|AnchorStyles.Left|AnchorStyles.Right; Place(_chartType,31,23,188,20); _chartType.Anchor=AnchorStyles.Top|AnchorStyles.Left|AnchorStyles.Right; Place(_quickChart,9,51,120,16); Place(_advancedChart,171,51,72,16); _advancedChart.Anchor=AnchorStyles.Top|AnchorStyles.Right; content.Controls.Add(_chartType);content.Controls.Add(_quickChart);content.Controls.Add(_advancedChart);
-        var background=Box("背景及透明度",21,177,288,65); background.Anchor=AnchorStyles.Top|AnchorStyles.Left|AnchorStyles.Right; background.Controls.Add(LabelAt("背景：",11,32)); Place(_chartBackground,51,28,80,20); background.Controls.Add(_chartBackground); background.Controls.Add(LabelAt("透明度：",146,32)); Place(_chartOpacity,195,28,80,20); _chartOpacity.Anchor=AnchorStyles.Top|AnchorStyles.Right;background.Controls.Add(_chartOpacity);
-        page.Controls.Add(open);page.Controls.Add(content);page.Controls.Add(background);return page;
+        var layout=new TableLayoutPanel{Dock=DockStyle.Top,Height=330,Padding=new Padding(18,10,18,0),ColumnCount=1,RowCount=3};
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute,100));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute,112));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute,102));
+
+        var open=new GroupBox{Text="开启方式",Dock=DockStyle.Fill,Margin=new Padding(4,3,4,6)};
+        var openGrid=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(18,8,18,7),ColumnCount=2,RowCount=2};
+        openGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,50));openGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,50));
+        openGrid.RowStyles.Add(new RowStyle(SizeType.Percent,50));openGrid.RowStyles.Add(new RowStyle(SizeType.Percent,50));
+        AddOption(openGrid,_chart,0,0);AddOption(openGrid,_details,1,0);AddOption(openGrid,_singleClick,0,1);AddOption(openGrid,_doubleClick,1,1);
+        open.Controls.Add(openGrid);
+
+        var content=new GroupBox{Text="股价图显示内容",Dock=DockStyle.Fill,Margin=new Padding(4,3,4,6)};
+        var contentGrid=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(10,5,10,4),ColumnCount=2,RowCount=2};
+        contentGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,50));contentGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,50));
+        contentGrid.RowStyles.Add(new RowStyle(SizeType.Absolute,34));contentGrid.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+        _chartType.Dock=DockStyle.Fill;_chartType.Margin=new Padding(0,3,0,5);contentGrid.Controls.Add(_chartType,0,0);contentGrid.SetColumnSpan(_chartType,2);
+        AddOption(contentGrid,_quickChart,0,1);AddOption(contentGrid,_advancedChart,1,1);content.Controls.Add(contentGrid);
+
+        var background=new GroupBox{Text="背景及透明度",Dock=DockStyle.Fill,Margin=new Padding(4,3,4,3)};
+        var backgroundGrid=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(10,12,10,10),ColumnCount=4,RowCount=1};
+        backgroundGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,82));backgroundGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,50));backgroundGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,100));backgroundGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,50));
+        backgroundGrid.Controls.Add(new Label{Text="背景：",AutoSize=true,Anchor=AnchorStyles.Right},0,0);_chartBackground.Dock=DockStyle.None;_chartBackground.Anchor=AnchorStyles.Left|AnchorStyles.Right;_chartBackground.Margin=new Padding(0,0,18,0);backgroundGrid.Controls.Add(_chartBackground,1,0);
+        backgroundGrid.Controls.Add(new Label{Text="透明度：",AutoSize=true,Anchor=AnchorStyles.Right},2,0);_chartOpacity.Dock=DockStyle.None;_chartOpacity.Anchor=AnchorStyles.Left|AnchorStyles.Right;_chartOpacity.Margin=Padding.Empty;backgroundGrid.Controls.Add(_chartOpacity,3,0);background.Controls.Add(backgroundGrid);
+
+        layout.Controls.Add(open,0,0);layout.Controls.Add(content,0,1);layout.Controls.Add(background,0,2);page.Controls.Add(layout);return page;
+        static void AddOption(TableLayoutPanel panel,Control option,int column,int row){option.Dock=DockStyle.None;option.Anchor=AnchorStyles.Left;option.AutoSize=true;option.MinimumSize=new Size(0,24);option.Margin=new Padding(4,4,4,4);panel.Controls.Add(option,column,row);}
     }
 
     private TabPage BuildOtherPage()
@@ -162,7 +190,7 @@ public sealed class SettingsForm : Form
     {
         foreach (var stock in s.Stocks) AddStockRow(CloneStock(stock));
         Select(_codeMode, s.CodeDisplayMode); Select(_nameMode, s.NameDisplayMode); Select(_priceMode, s.PriceDisplayMode); Select(_changeMode, s.ChangeDisplayMode); Select(_noteMode, s.NoteDisplayMode);
-        _riseSymbol.Text=s.RiseSymbol; _fallSymbol.Text=s.FallSymbol; _percentSymbol.Text=s.PercentSymbol; _sealVolume.Checked=s.ShowSealVolume;
+        _sealVolume.Checked=s.ShowSealVolume;
         _fontSize.Text=s.FontSize.ToString("0"); _spacing.SelectedIndex=Math.Clamp(s.RowSpacing/3,0,_spacing.Items.Count-1); _opacity.Text=s.OpacityPercent+"%"; _refresh.Text=s.RefreshSeconds+"s";
         _background.BackColor=Color.FromArgb(s.BackgroundColorArgb); _boss.Checked=s.EnableBossKey; _bossShortcut.Text=FormatShortcut(s.BossKeyModifiers,s.BossKey); _bossShortcut.Enabled=s.EnableBossKey; _bossExit.Checked=s.BossKeyExits; _bossHide.Checked=!s.BossKeyExits;
         _topMost.Checked=s.AlwaysOnTop; _tray.Checked=s.ShowTrayIcon; _chart.Checked=s.EnableChart; _chartType.Text=s.ChartType; _details.Checked=s.OpenDetailsOnDoubleClick; _doubleClick.Checked=s.OpenDetailsOnDoubleClick; _singleClick.Checked=!s.OpenDetailsOnDoubleClick;
@@ -172,7 +200,7 @@ public sealed class SettingsForm : Form
     private bool ReadControls()
     {
         Result.Stocks=_stocks.Rows.Cast<DataGridViewRow>().Select(x=>(StockItem)x.Tag!).ToList(); Result.CodeDisplayMode=_codeMode.SelectedIndex; Result.NameDisplayMode=_nameMode.SelectedIndex; Result.PriceDisplayMode=_priceMode.SelectedIndex; Result.ChangeDisplayMode=_changeMode.SelectedIndex; Result.NoteDisplayMode=_noteMode.SelectedIndex;
-        Result.RiseSymbol=_riseSymbol.Text; Result.FallSymbol=_fallSymbol.Text; Result.PercentSymbol=_percentSymbol.Text; Result.ShowSealVolume=_sealVolume.Checked; Result.FontSize=(float)Number(_fontSize.Text,11); Result.RowSpacing=_spacing.SelectedIndex*3; Result.OpacityPercent=(int)Number(_opacity.Text,100); Result.RefreshSeconds=(int)Number(_refresh.Text,3); Result.BackgroundColorArgb=_background.BackColor.ToArgb(); Result.TransparentBackground=_background.BackColor.ToArgb()==Color.White.ToArgb();
+        Result.ShowSealVolume=_sealVolume.Checked; Result.FontSize=(float)Number(_fontSize.Text,11); Result.RowSpacing=_spacing.SelectedIndex*3; Result.OpacityPercent=(int)Number(_opacity.Text,100); Result.RefreshSeconds=(int)Number(_refresh.Text,3); Result.BackgroundColorArgb=_background.BackColor.ToArgb(); Result.TransparentBackground=_background.BackColor.ToArgb()==Color.White.ToArgb();
         Result.EnableBossKey=_boss.Checked; ReadShortcut(_bossShortcut.Text,out var modifiers,out var key); Result.BossKeyModifiers=modifiers; Result.BossKey=key; Result.BossKeyExits=_bossExit.Checked; Result.AlwaysOnTop=_topMost.Checked; Result.ShowTrayIcon=_tray.Checked; Result.EnableChart=_chart.Checked; Result.ChartType=_chartType.Text; Result.OpenDetailsOnDoubleClick=_doubleClick.Checked; Result.MouseThrough=_mouseThrough.Checked; Result.EnableBalloonAlert=_balloon.Checked; Result.EnableSoundAlert=_sound.Checked; Result.AlignText=_align.Checked; Result.ShowProfit=_profit.Checked; Result.ShowCode=Result.CodeDisplayMode!=3; Result.ShowName=Result.NameDisplayMode!=5; Result.ShowCurrent=Result.PriceDisplayMode!=1; Result.ShowChange=Result.PriceDisplayMode==2; Result.ShowChangePercent=Result.ChangeDisplayMode!=2; Result.Normalize(); return true;
     }
 
@@ -181,10 +209,8 @@ public sealed class SettingsForm : Form
         var code=_codeMode.SelectedIndex switch{1=>"000",2=>"00",3=>"",_=>"sh600000"};
         var baseName=_nameMode.SelectedIndex switch{1=>"浦发",2=>"浦",3=>"银行",4=>"行",5=>"",6=>"浦发银行",_=>"浦发银行"};
         var name=_noteMode.SelectedIndex switch{1=>baseName+"(自选)",2=>"自选",_=>baseName};
-        var rise=string.IsNullOrEmpty(_riseSymbol.Text)?"+":_riseSymbol.Text;
-        var percent=string.IsNullOrEmpty(_percentSymbol.Text)?"%":_percentSymbol.Text;
-        var price=_priceMode.SelectedIndex switch{1=>"",2=>$"10.00  {rise}0.12",_=>"10.00"};
-        var change=_changeMode.SelectedIndex==2?"":$"{rise}1.20{percent}";
+        var price=_priceMode.SelectedIndex switch{1=>"",2=>"10.00  +0.12",_=>"10.00"};
+        var change=_changeMode.SelectedIndex==2?"":"+1.20%";
         var sealedText=_sealVolume.Checked?"(999手)":"";
         _sample.Text=string.Join("  ",new[]{code,name,price,change,sealedText}.Where(x=>x.Length>0));
         _sample.ForeColor=_changeMode.SelectedIndex switch{1=>Color.FromArgb(Result.FlatColorArgb),3=>Color.FromArgb(Result.RiseColorArgb),2=>SystemColors.ControlText,_=>Color.Red};
