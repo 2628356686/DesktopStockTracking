@@ -20,6 +20,7 @@ public sealed class AppSettings
     public bool EnableChart { get; set; } = true;
     public string ChartType { get; set; } = "分时图";
     public bool ShowCode { get; set; } = true;
+    public bool ShowBoard { get; set; }
     public bool ShowName { get; set; } = true;
     public bool ShowCurrent { get; set; } = true;
     public bool ShowChange { get; set; }
@@ -28,6 +29,8 @@ public sealed class AppSettings
     public bool ShowSealVolume { get; set; }
     public bool ShowProfit { get; set; }
     public bool ShowNote { get; set; }
+    public bool MonitorDragonTiger { get; set; }
+    public bool MonitorSevereAbnormal { get; set; }
     public bool AlignText { get; set; } = true;
     public bool EnableBalloonAlert { get; set; } = true;
     public bool EnableSoundAlert { get; set; }
