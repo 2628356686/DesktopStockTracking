@@ -46,7 +46,8 @@ public sealed class MainForm : Form
     private readonly FlowLayoutPanel _rows=new BufferedFlowLayoutPanel(); private readonly Label _status=new(); private readonly NotifyIcon _tray=new(); private readonly ContextMenuStrip _menu=new();
     private readonly HashSet<string> _alerts=new(StringComparer.OrdinalIgnoreCase); private readonly Dictionary<string,StockQuote> _latest=new(StringComparer.OrdinalIgnoreCase); private readonly Dictionary<string,List<(DateTime Time,decimal Price)>> _history=new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string,string> _monitoringSummary=new(StringComparer.OrdinalIgnoreCase); private readonly Dictionary<string,string> _monitoringInline=new(StringComparer.OrdinalIgnoreCase); private readonly ToolTip _rowTips=new(){InitialDelay=350,ReshowDelay=100,AutoPopDelay=30000,ShowAlways=true};
-    private AppSettings _settings; private CancellationTokenSource? _cts; private bool _refreshing; private Point _dragOrigin; private Font? _rowFont; private bool _rowsNeedRebuild=true; private DateTime _monitoringUpdated=DateTime.MinValue;
+    private readonly Dictionary<string,List<(DateTime Time,long Volume)>> _sealVolumeHistory=new(StringComparer.OrdinalIgnoreCase); private readonly Dictionary<string,(decimal Drop,DateTime Expires)> _sealAbnormal=new(StringComparer.OrdinalIgnoreCase);
+    private AppSettings _settings; private CancellationTokenSource? _cts; private bool _refreshing; private Point _dragOrigin; private Font? _rowFont; private bool _rowsNeedRebuild=true; private DateTime _monitoringUpdated=DateTime.MinValue; private TimeSpan _monitoringRefreshInterval=TimeSpan.FromMinutes(10);
 
     public MainForm()
     {
@@ -141,12 +142,19 @@ public sealed class MainForm : Form
         if(_settings.PriceDisplayMode!=1){var price=q.Current.ToString("0.00");if(_settings.PriceDisplayMode==2)price+=FormatSigned(q.Change,"+","-");parts.Add(price);}
         if(_settings.ChangeDisplayMode!=2)parts.Add(FormatSigned(q.ChangePercent,"+","-")+"%");
         if(_settings.ShowSealVolume&&q.SealedVolume>0)parts.Add("封"+FormatSealVolume(q.SealedVolume));
+        if(_settings.MonitorSealAbnormal&&_sealAbnormal.TryGetValue(stock.NormalizedCode,out var sealEvent)&&sealEvent.Expires>DateTime.Now)parts.Add($"封板异动10秒降{sealEvent.Drop:0.##}%");
         if((_settings.MonitorDragonTiger||_settings.MonitorSevereAbnormal)&&_monitoringInline.TryGetValue(stock.NormalizedCode,out var monitoringText)&&monitoringText.Length>0)parts.Add(monitoringText);
         if(_settings.ShowVolume)parts.Add((q.Volume/10000m).ToString("0.00")+"万");
         if(_settings.ShowProfit&&stock.CostPrice is{}cost&&stock.Position is{}pos){var profit=(q.Current-cost)*pos;parts.Add("盈亏"+FormatSigned(profit,"+","-"));}
         label.Text=string.Join(_settings.AlignText?"  ":" ",parts);
         label.ForeColor=_settings.ChangeDisplayMode==1?Color.FromArgb(_settings.FlatColorArgb):q.Change>0?Color.FromArgb(_settings.RiseColorArgb):q.Change<0?Color.FromArgb(_settings.FallColorArgb):Color.FromArgb(_settings.FlatColorArgb);
-        _rowTips.SetToolTip(label,_monitoringSummary.GetValueOrDefault(stock.NormalizedCode,string.Empty));
+        var tips=new List<string>();var monitoringTip=_monitoringSummary.GetValueOrDefault(stock.NormalizedCode,string.Empty);if(monitoringTip.Length>0)tips.Add(monitoringTip);
+        if(_settings.MonitorSealAbnormal&&_sealAbnormal.TryGetValue(stock.NormalizedCode,out sealEvent)&&sealEvent.Expires>DateTime.Now)
+        {
+            if(tips.Count==0)tips.Add(sourceName);
+            tips.Add($"封板异动：10秒内封单量下降 {sealEvent.Drop:0.00}%（阈值30%）");
+        }
+        _rowTips.SetToolTip(label,string.Join(Environment.NewLine+Environment.NewLine,tips));
     }
 
     private static string FormatCode(string code,int mode)=>mode switch{1=>code.Length>3?code[^3..]:code,2=>code.Length>2?code[^2..]:code,3=>string.Empty,_=>code};
@@ -160,7 +168,7 @@ public sealed class MainForm : Form
         if(_refreshing||_settings.Stocks.Count==0)return;_refreshing=true;_cts?.Cancel();_cts?.Dispose();_cts=new CancellationTokenSource();
         try
         {
-            var data=await _quotes.GetQuotesAsync(_settings.Stocks.Select(x=>x.Code),_cts.Token);foreach(var pair in data){_latest[pair.Key]=pair.Value;if(pair.Value.IsPreMarketFallback)continue;if(!_history.TryGetValue(pair.Key,out var h))_history[pair.Key]=h=[];if(h.Count==0||h[^1].Price!=pair.Value.Current){h.Add((DateTime.Now,pair.Value.Current));if(h.Count>600)h.RemoveAt(0);}}
+            var data=await _quotes.GetQuotesAsync(_settings.Stocks.Select(x=>x.Code),_cts.Token);foreach(var pair in data){_latest[pair.Key]=pair.Value;if(pair.Value.IsPreMarketFallback)continue;if(!_history.TryGetValue(pair.Key,out var h)){h=[];_history[pair.Key]=h;}if(h.Count==0||h[^1].Price!=pair.Value.Current){h.Add((DateTime.Now,pair.Value.Current));if(h.Count>600)h.RemoveAt(0);}UpdateSealAbnormal(pair.Key,pair.Value);}
             foreach(var stock in _settings.Stocks)if(_latest.TryGetValue(stock.NormalizedCode,out var q)&&!q.IsPreMarketFallback)CheckAlert(stock,q);await RefreshMonitoringAsync(_cts.Token);Render();var latest=data.Values.Where(x=>x.QuoteTime.HasValue).Select(x=>x.QuoteTime!.Value).DefaultIfEmpty(DateTime.Now).Max();_status.Text=$"{latest:HH:mm:ss} · {_settings.RefreshSeconds}s";
         }
         catch(OperationCanceledException){}catch(Exception ex){_status.Text=ex is HttpRequestException?"网络异常，等待重试":"刷新失败："+ex.Message;}finally{_refreshing=false;}
@@ -173,10 +181,33 @@ public sealed class MainForm : Form
         if(key.Length==0){_alerts.Remove(s.NormalizedCode+":U");_alerts.Remove(s.NormalizedCode+":L");_alerts.Remove(s.NormalizedCode+":P");}
     }
 
+    private void UpdateSealAbnormal(string code,StockQuote quote)
+    {
+        if(!_settings.MonitorSealAbnormal)
+        {
+            _sealVolumeHistory.Clear();_sealAbnormal.Clear();return;
+        }
+        var now=DateTime.Now;var volume=quote.SealedVolume;
+        if(!_sealVolumeHistory.TryGetValue(code,out var samples))_sealVolumeHistory[code]=samples=[];
+        var sampleWindow=TimeSpan.FromSeconds(10+Math.Max(1,_settings.RefreshSeconds/4d));
+        samples.RemoveAll(x=>now-x.Time>sampleWindow);
+        var baseline=samples.Count==0?0:samples.Max(x=>x.Volume);
+        if(volume>0)samples.Add((now,volume));
+        if(baseline<=0)return;
+        var drop=(baseline-volume)*100m/baseline;
+        if(drop>=30m)
+        {
+            if(_sealAbnormal.TryGetValue(code,out var current)&&current.Expires>now)drop=Math.Max(drop,current.Drop);
+            _sealAbnormal[code]=(drop,now.AddSeconds(30));
+        }
+        else if(_sealAbnormal.TryGetValue(code,out var existing)&&existing.Expires<=now)_sealAbnormal.Remove(code);
+        if(volume<=0)_sealVolumeHistory.Remove(code);
+    }
+
     private async Task RefreshMonitoringAsync(CancellationToken cancellationToken)
     {
         if(!_settings.MonitorDragonTiger&&!_settings.MonitorSevereAbnormal){_monitoringSummary.Clear();_monitoringInline.Clear();return;}
-        if(DateTime.Now-_monitoringUpdated<TimeSpan.FromMinutes(10)&&_settings.Stocks.All(x=>AbnormalMovementMonitor.IsIndex(x.Code)||_monitoringSummary.ContainsKey(x.NormalizedCode)))return;
+        if(DateTime.Now-_monitoringUpdated<_monitoringRefreshInterval&&_settings.Stocks.All(x=>AbnormalMovementMonitor.IsIndex(x.Code)||_monitoringSummary.ContainsKey(x.NormalizedCode)))return;
         var stocks=_settings.Stocks.Where(x=>!AbnormalMovementMonitor.IsIndex(x.Code)&&_latest.ContainsKey(x.NormalizedCode)).ToList();
         var codes=stocks.Select(x=>x.NormalizedCode).Concat(stocks.Select(x=>AbnormalMovementMonitor.BenchmarkCode(x.Code))).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         var daily=new Dictionary<string,IReadOnlyList<IntradayPoint>>(StringComparer.OrdinalIgnoreCase);
@@ -187,6 +218,7 @@ public sealed class MainForm : Form
             catch{lock(daily)daily[code]=[];}
         }));
         _monitoringSummary.Clear();_monitoringInline.Clear();
+        decimal? nearestSevereDistance=null;
         foreach(var stock in stocks)
         {
             var code=stock.NormalizedCode;var benchmarkCode=AbnormalMovementMonitor.BenchmarkCode(code);
@@ -195,12 +227,26 @@ public sealed class MainForm : Form
             _monitoringSummary[code]=AbnormalMovementMonitor.BuildSummary(code,stock.DisplayName,quote,stockPoints??[],benchmarkPoints??[],_settings.MonitorDragonTiger,_settings.MonitorSevereAbnormal);
             var inlineParts=new List<string>();
             if(_settings.MonitorDragonTiger)inlineParts.Add(AbnormalMovementMonitor.BuildDragonTigerInlineStatus(code,quote,stockPoints??[],benchmarkPoints??[]));
-            if(_settings.MonitorSevereAbnormal)inlineParts.Add(AbnormalMovementMonitor.BuildInlineStatus(code,stockPoints??[],benchmarkPoints??[]));
+            if(_settings.MonitorSevereAbnormal)
+            {
+                inlineParts.Add(AbnormalMovementMonitor.BuildInlineStatus(code,stockPoints??[],benchmarkPoints??[]));
+                var distance=AbnormalMovementMonitor.GetSevereThresholdDistance(code,stockPoints??[],benchmarkPoints??[]);
+                if(distance is{}d&&(nearestSevereDistance is null||d<nearestSevereDistance))nearestSevereDistance=d;
+            }
             _monitoringInline[code]=string.Join(" ",inlineParts.Where(x=>x.Length>0));
         }
         foreach(var stock in _settings.Stocks.Where(x=>AbnormalMovementMonitor.IsIndex(x.Code)))_monitoringSummary[stock.NormalizedCode]="异动监控仅适用于个股。";
+        _monitoringRefreshInterval=MonitoringRefreshInterval(nearestSevereDistance);
         _monitoringUpdated=DateTime.Now;
     }
+
+    private TimeSpan MonitoringRefreshInterval(decimal? distance)=>distance switch
+    {
+        <=10m=>TimeSpan.FromSeconds(_settings.RefreshSeconds),
+        <=15m=>TimeSpan.FromSeconds(30),
+        <=30m=>TimeSpan.FromMinutes(2),
+        _=>TimeSpan.FromMinutes(10)
+    };
 
     private async void OpenDetails(StockItem stock)
     {

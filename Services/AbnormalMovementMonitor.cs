@@ -58,6 +58,17 @@ public static class AbnormalMovementMonitor
         return string.Join(" ",badges);
     }
 
+    public static decimal? GetSevereThresholdDistance(string code,IReadOnlyList<IntradayPoint> stock,IReadOnlyList<IntradayPoint> benchmark)
+    {
+        if(IsIndex(code))return null;
+        var normalized=StockCode.Normalize(code);var north=normalized.StartsWith("bj",StringComparison.OrdinalIgnoreCase);
+        var tenUp=north?150m:100m;var tenDown=north?-60m:-50m;var thirtyUp=north?300m:200m;var thirtyDown=north?-75m:-70m;
+        var distances=new List<decimal>();
+        AddThresholdDistance(distances,Deviation(stock,benchmark,10),tenUp,tenDown);
+        AddThresholdDistance(distances,Deviation(stock,benchmark,30),thirtyUp,thirtyDown);
+        return distances.Count==0?null:distances.Min();
+    }
+
     public static string BuildDragonTigerInlineStatus(string code,StockQuote quote,IReadOnlyList<IntradayPoint> stock,IReadOnlyList<IntradayPoint> benchmark)
     {
         if(IsIndex(code))return string.Empty;
@@ -84,6 +95,13 @@ public static class AbnormalMovementMonitor
         var remaining=threshold-v;
         if(remaining<=0)badges.Add($"异动{days}日偏离已触发");
         else if(remaining<=nearRange)badges.Add($"异动{days}日偏离差{remaining:0.##}%");
+    }
+
+    private static void AddThresholdDistance(List<decimal> distances,decimal? value,decimal up,decimal down)
+    {
+        if(value is not{}v)return;
+        if(v>=up||v<=down){distances.Add(0);return;}
+        distances.Add(Math.Min(up-v,v-down));
     }
 
     private static void AddPeriod(List<string> lines,int days,decimal? value,decimal up,decimal down)

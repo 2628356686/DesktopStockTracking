@@ -49,6 +49,7 @@ public sealed class SettingsForm : Form
     private readonly CheckBox _profit = new() { Text = "显示持仓盈亏", AutoSize = true };
     private readonly CheckBox _monitorDragonTiger = new() { Text = "龙虎榜异动", AutoSize = true };
     private readonly CheckBox _monitorSevereAbnormal = new() { Text = "严重异常异动", AutoSize = true };
+    private readonly CheckBox _monitorSealAbnormal = new() { Text = "封板异动", AutoSize = true };
     private readonly ToolTip _tips = new();
 
     [Browsable(false)]
@@ -192,15 +193,17 @@ public sealed class SettingsForm : Form
     private TabPage BuildMonitorPage()
     {
         var page=Page("监控");
-        var layout=new TableLayoutPanel{Dock=DockStyle.Top,Height=180,Padding=new Padding(28,22,28,12),ColumnCount=1,RowCount=3};
+        var layout=new TableLayoutPanel{Dock=DockStyle.Top,Height=224,Padding=new Padding(28,22,28,12),ColumnCount=1,RowCount=4};
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute,44));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,44));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,54));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute,44));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,44));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,44));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,54));
         _monitorDragonTiger.Anchor=AnchorStyles.Left;_monitorDragonTiger.Margin=new Padding(8,6,8,6);
         _monitorSevereAbnormal.Anchor=AnchorStyles.Left;_monitorSevereAbnormal.Margin=new Padding(8,6,8,6);
-        layout.Controls.Add(_monitorDragonTiger,0,0);layout.Controls.Add(_monitorSevereAbnormal,0,1);
-        layout.Controls.Add(new Label{Text="启用后，将鼠标悬浮在关注股票行上即可查看监控结果。",Dock=DockStyle.Fill,ForeColor=Color.DimGray,TextAlign=ContentAlignment.MiddleLeft,Margin=new Padding(8,4,8,4)},0,2);
+        _monitorSealAbnormal.Anchor=AnchorStyles.Left;_monitorSealAbnormal.Margin=new Padding(8,6,8,6);
+        layout.Controls.Add(_monitorDragonTiger,0,0);layout.Controls.Add(_monitorSevereAbnormal,0,1);layout.Controls.Add(_monitorSealAbnormal,0,2);
+        layout.Controls.Add(new Label{Text="启用后，将鼠标悬浮在关注股票行上即可查看监控结果。",Dock=DockStyle.Fill,ForeColor=Color.DimGray,TextAlign=ContentAlignment.MiddleLeft,Margin=new Padding(8,4,8,4)},0,3);
         _tips.SetToolTip(_monitorDragonTiger,"龙虎榜异动规则：\r\n沪深主板：单日偏离±7%、振幅15%，或3日累计偏离±20%；\r\n创业板/科创板：单日涨跌±15%、振幅30%，或3日累计偏离±30%；\r\n北交所：单日涨跌±20%、振幅30%，或3日累计偏离±40%。\r\n换手率指标因行情源不提供可靠流通股本，暂不计算。");
         _tips.SetToolTip(_monitorSevereAbnormal,"严重异常异动规则：\r\n沪深主板、创业板、科创板：10日偏离+100%/-50%，30日偏离+200%/-70%；\r\n北交所：10日偏离+150%/-60%，30日偏离+300%/-75%。\r\n连续出现多次同向普通异动需结合交易所公告重置口径，暂不自动计算。");
+        _tips.SetToolTip(_monitorSealAbnormal,"封板异动规则：\r\n股票处于涨停或跌停封板状态时，若约10秒内封单量下降达到30%，触发封板异动提示。\r\n检测频率跟随设置中的行情刷新时间，触发结果保留30秒。");
         page.Controls.Add(layout);return page;
     }
 
@@ -212,14 +215,14 @@ public sealed class SettingsForm : Form
         _fontSize.Text=s.FontSize.ToString("0"); _spacing.SelectedIndex=Math.Clamp(s.RowSpacing/3,0,_spacing.Items.Count-1); _opacity.Text=s.OpacityPercent+"%"; _refresh.Text=s.RefreshSeconds+"s";
         _background.BackColor=Color.FromArgb(s.BackgroundColorArgb); _boss.Checked=s.EnableBossKey; _bossShortcut.Text=FormatShortcut(s.BossKeyModifiers,s.BossKey); _bossShortcut.Enabled=s.EnableBossKey; _bossExit.Checked=s.BossKeyExits; _bossHide.Checked=!s.BossKeyExits;
         _topMost.Checked=s.AlwaysOnTop; _tray.Checked=s.ShowTrayIcon; _chart.Checked=s.EnableChart; _chartType.Text=s.ChartType; _details.Checked=s.OpenDetailsOnDoubleClick; _doubleClick.Checked=s.OpenDetailsOnDoubleClick; _singleClick.Checked=!s.OpenDetailsOnDoubleClick;
-        _mouseThrough.Checked=s.MouseThrough; _balloon.Checked=s.EnableBalloonAlert; _sound.Checked=s.EnableSoundAlert; _align.Checked=s.AlignText; _profit.Checked=s.ShowProfit; _monitorDragonTiger.Checked=s.MonitorDragonTiger; _monitorSevereAbnormal.Checked=s.MonitorSevereAbnormal; UpdateSample();
+        _mouseThrough.Checked=s.MouseThrough; _balloon.Checked=s.EnableBalloonAlert; _sound.Checked=s.EnableSoundAlert; _align.Checked=s.AlignText; _profit.Checked=s.ShowProfit; _monitorDragonTiger.Checked=s.MonitorDragonTiger; _monitorSevereAbnormal.Checked=s.MonitorSevereAbnormal; _monitorSealAbnormal.Checked=s.MonitorSealAbnormal; UpdateSample();
     }
 
     private bool ReadControls()
     {
         Result.Stocks=_stocks.Rows.Cast<DataGridViewRow>().Select(x=>(StockItem)x.Tag!).ToList(); Result.CodeDisplayMode=_codeMode.SelectedIndex; Result.ShowBoard=_showBoard.Checked; Result.NameDisplayMode=_nameMode.SelectedIndex; Result.PriceDisplayMode=_priceMode.SelectedIndex; Result.ChangeDisplayMode=_changeMode.SelectedIndex; Result.NoteDisplayMode=_noteMode.SelectedIndex;
         Result.ShowSealVolume=_sealVolume.Checked; Result.FontSize=(float)Number(_fontSize.Text,11); Result.RowSpacing=_spacing.SelectedIndex*3; Result.OpacityPercent=(int)Number(_opacity.Text,100); Result.RefreshSeconds=(int)Number(_refresh.Text,3); Result.BackgroundColorArgb=_background.BackColor.ToArgb(); Result.TransparentBackground=_background.BackColor.ToArgb()==Color.White.ToArgb();
-        Result.EnableBossKey=_boss.Checked; ReadShortcut(_bossShortcut.Text,out var modifiers,out var key); Result.BossKeyModifiers=modifiers; Result.BossKey=key; Result.BossKeyExits=_bossExit.Checked; Result.AlwaysOnTop=_topMost.Checked; Result.ShowTrayIcon=_tray.Checked; Result.EnableChart=_chart.Checked; Result.ChartType=_chartType.Text; Result.OpenDetailsOnDoubleClick=_doubleClick.Checked; Result.MouseThrough=_mouseThrough.Checked; Result.EnableBalloonAlert=_balloon.Checked; Result.EnableSoundAlert=_sound.Checked; Result.AlignText=_align.Checked; Result.ShowProfit=_profit.Checked; Result.MonitorDragonTiger=_monitorDragonTiger.Checked; Result.MonitorSevereAbnormal=_monitorSevereAbnormal.Checked; Result.ShowCode=Result.CodeDisplayMode!=3; Result.ShowName=Result.NameDisplayMode!=5; Result.ShowCurrent=Result.PriceDisplayMode!=1; Result.ShowChange=Result.PriceDisplayMode==2; Result.ShowChangePercent=Result.ChangeDisplayMode!=2; Result.Normalize(); return true;
+        Result.EnableBossKey=_boss.Checked; ReadShortcut(_bossShortcut.Text,out var modifiers,out var key); Result.BossKeyModifiers=modifiers; Result.BossKey=key; Result.BossKeyExits=_bossExit.Checked; Result.AlwaysOnTop=_topMost.Checked; Result.ShowTrayIcon=_tray.Checked; Result.EnableChart=_chart.Checked; Result.ChartType=_chartType.Text; Result.OpenDetailsOnDoubleClick=_doubleClick.Checked; Result.MouseThrough=_mouseThrough.Checked; Result.EnableBalloonAlert=_balloon.Checked; Result.EnableSoundAlert=_sound.Checked; Result.AlignText=_align.Checked; Result.ShowProfit=_profit.Checked; Result.MonitorDragonTiger=_monitorDragonTiger.Checked; Result.MonitorSevereAbnormal=_monitorSevereAbnormal.Checked; Result.MonitorSealAbnormal=_monitorSealAbnormal.Checked; Result.ShowCode=Result.CodeDisplayMode!=3; Result.ShowName=Result.NameDisplayMode!=5; Result.ShowCurrent=Result.PriceDisplayMode!=1; Result.ShowChange=Result.PriceDisplayMode==2; Result.ShowChangePercent=Result.ChangeDisplayMode!=2; Result.Normalize(); return true;
     }
 
     private void UpdateSample()

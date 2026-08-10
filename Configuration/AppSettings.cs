@@ -31,6 +31,7 @@ public sealed class AppSettings
     public bool ShowNote { get; set; }
     public bool MonitorDragonTiger { get; set; }
     public bool MonitorSevereAbnormal { get; set; }
+    public bool MonitorSealAbnormal { get; set; }
     public bool AlignText { get; set; } = true;
     public bool EnableBalloonAlert { get; set; } = true;
     public bool EnableSoundAlert { get; set; }
