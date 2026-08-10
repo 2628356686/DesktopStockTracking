@@ -78,3 +78,31 @@
 ### 运行程序
 
 运行 `StockTickerLite.exe` 即可启动。程序设置会自动保存，下次启动时继续使用。
+
+### Release 编译
+
+在项目目录中执行：
+
+```powershell
+dotnet build -c Release
+```
+
+编译结果位于：
+
+```text
+bin\Release\net9.0-windows\
+```
+
+### 发布独立运行版本
+
+如果需要生成可发送给其他 Windows 64位电脑使用、无需另外安装 .NET 的版本，执行：
+
+```powershell
+dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
+```
+
+发布结果位于：
+
+```text
+bin\Release\net9.0-windows\win-x64\publish\
+```
