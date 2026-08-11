@@ -17,6 +17,12 @@ public sealed record StockQuote(
     DateTime? QuoteTime,
     bool IsPreMarketFallback = false)
 {
+    public decimal CirculatingShares { get; init; }
+    public string Industry { get; init; } = "";
+
+    public decimal? TurnoverRate =>
+        CirculatingShares > 0 ? Volume / CirculatingShares * 100 : null;
+
     public decimal Change => Current - PreviousClose;
     public decimal ChangePercent =>
         PreviousClose == 0 ? 0 : Change / PreviousClose * 100;

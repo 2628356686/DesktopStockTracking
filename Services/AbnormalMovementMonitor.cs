@@ -82,6 +82,28 @@ public static class AbnormalMovementMonitor
         return string.Join(" ",badges);
     }
 
+    public static string BuildTurnoverInlineStatus(string code,StockQuote quote)
+    {
+        if(IsIndex(code)||quote.TurnoverRate is not{}turnover)return string.Empty;
+        var threshold=DragonTigerTurnoverThreshold(code);var badges=new List<string>();
+        AddDragonTigerBadge(badges,"龙虎榜当日换手率",turnover,threshold);
+        return string.Join(" ",badges);
+    }
+
+    public static string BuildTurnoverSummaryLine(string code,StockQuote quote)
+    {
+        if(IsIndex(code)||quote.TurnoverRate is not{}turnover)return string.Empty;
+        var threshold=DragonTigerTurnoverThreshold(code);
+        return $"  当日换手率 {turnover:0.00}%，距{threshold:0}%阈值 {DistanceUp(turnover,threshold)}";
+    }
+
+    private static decimal DragonTigerTurnoverThreshold(string code)
+    {
+        var normalized=StockCode.Normalize(code);
+        var growth=normalized.StartsWith("sh688",StringComparison.OrdinalIgnoreCase)||normalized.StartsWith("sz300",StringComparison.OrdinalIgnoreCase)||normalized.StartsWith("sz301",StringComparison.OrdinalIgnoreCase);
+        return growth?30m:20m;
+    }
+
     private static void AddDragonTigerBadge(List<string> badges,string label,decimal value,decimal threshold)
     {
         var remaining=threshold-value;

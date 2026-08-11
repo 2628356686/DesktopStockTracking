@@ -7,5 +7,6 @@
     <Nullable>enable</Nullable>
     <AssemblyName>StockTickerLite</AssemblyName>
     <RootNamespace>StockTickerLite</RootNamespace>
+    <Version>1.2.0</Version>
   </PropertyGroup>
 </Project>

@@ -14,9 +14,17 @@ internal sealed class StockRowLabel:Control
 {
     private static readonly Font BoardFont=new("Microsoft YaHei UI",8f,FontStyle.Bold);
     private string _boardText="";
+    private string _industryText="";
+    private Color _industryForeColor=Color.Empty;
     [System.ComponentModel.Browsable(false)]
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
     public string BoardText{get=>_boardText;set{if(_boardText==value)return;_boardText=value;ResizeToContent();Invalidate();}}
+    [System.ComponentModel.Browsable(false)]
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public string IndustryText{get=>_industryText;set{if(_industryText==value)return;_industryText=value;Invalidate();}}
+    [System.ComponentModel.Browsable(false)]
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public Color IndustryForeColor{get=>_industryForeColor;set{if(_industryForeColor==value)return;_industryForeColor=value;Invalidate();}}
     public StockRowLabel(){AutoSize=true;SetStyle(ControlStyles.SupportsTransparentBackColor|ControlStyles.UserPaint|ControlStyles.OptimizedDoubleBuffer,true);}
     public override Size GetPreferredSize(Size proposedSize)
     {
@@ -34,7 +42,20 @@ internal sealed class StockRowLabel:Control
             using var background=new SolidBrush(Color.FromArgb(226,234,243));using var border=new Pen(Color.FromArgb(150,169,191));e.Graphics.FillRectangle(background,rect);e.Graphics.DrawRectangle(border,rect.X,rect.Y,rect.Width-1,rect.Height-1);
             TextRenderer.DrawText(e.Graphics,_boardText,BoardFont,rect,Color.FromArgb(55,82,115),flags|TextFormatFlags.HorizontalCenter);x=rect.Right+5;
         }
-        TextRenderer.DrawText(e.Graphics,Text,Font,new Rectangle(x,0,Math.Max(0,Width-x),Height),ForeColor,flags);
+        var industryIndex=_industryText.Length>0?Text.IndexOf(_industryText,StringComparison.Ordinal):-1;
+        if(industryIndex<0)
+        {
+            TextRenderer.DrawText(e.Graphics,Text,Font,new Rectangle(x,0,Math.Max(0,Width-x),Height),ForeColor,flags);
+            return;
+        }
+        var before=Text[..industryIndex];var after=Text[(industryIndex+_industryText.Length)..];
+        DrawPart(before,ForeColor);DrawPart(_industryText,_industryForeColor.IsEmpty?ForeColor:_industryForeColor);DrawPart(after,ForeColor);
+        void DrawPart(string text,Color color)
+        {
+            if(text.Length==0)return;
+            var width=TextRenderer.MeasureText(text,Font,Size.Empty,TextFormatFlags.NoPadding|TextFormatFlags.SingleLine).Width;
+            TextRenderer.DrawText(e.Graphics,text,Font,new Rectangle(x,0,Math.Max(0,Width-x),Height),color,flags);x+=width;
+        }
     }
     private void ResizeToContent(){if(AutoSize)Size=GetPreferredSize(Size.Empty);}
 }
@@ -42,10 +63,11 @@ internal sealed class StockRowLabel:Control
 public sealed class MainForm : Form
 {
     private const int HotKeyId=100; private const int WmHotKey=0x0312; private const int ModAlt=1; private const int ModControl=2; private const int ModShift=4; private const int GwlExStyle=-20; private const int WsExTransparent=0x20; private const int WsExLayered=0x80000;
-    private readonly SettingsStore _store=new(); private readonly SinaQuoteService _quotes=new(); private readonly SinaChartService _charts=new(); private readonly System.Windows.Forms.Timer _timer=new();
+    private readonly SettingsStore _store=new(); private readonly SinaQuoteService _quotes=new(); private readonly SinaIndustryService _industries=new(); private readonly SinaChartService _charts=new(); private readonly System.Windows.Forms.Timer _timer=new();
     private readonly FlowLayoutPanel _rows=new BufferedFlowLayoutPanel(); private readonly Label _status=new(); private readonly NotifyIcon _tray=new(); private readonly ContextMenuStrip _menu=new();
     private readonly HashSet<string> _alerts=new(StringComparer.OrdinalIgnoreCase); private readonly Dictionary<string,StockQuote> _latest=new(StringComparer.OrdinalIgnoreCase); private readonly Dictionary<string,List<(DateTime Time,decimal Price)>> _history=new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string,string> _monitoringSummary=new(StringComparer.OrdinalIgnoreCase); private readonly Dictionary<string,string> _monitoringInline=new(StringComparer.OrdinalIgnoreCase); private readonly ToolTip _rowTips=new(){InitialDelay=350,ReshowDelay=100,AutoPopDelay=30000,ShowAlways=true};
+    private readonly Dictionary<string,decimal> _industryChanges=new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string,List<(DateTime Time,long Volume)>> _sealVolumeHistory=new(StringComparer.OrdinalIgnoreCase); private readonly Dictionary<string,(decimal Drop,DateTime Expires)> _sealAbnormal=new(StringComparer.OrdinalIgnoreCase);
     private AppSettings _settings; private CancellationTokenSource? _cts; private bool _refreshing; private Point _dragOrigin; private Font? _rowFont; private bool _rowsNeedRebuild=true; private DateTime _monitoringUpdated=DateTime.MinValue; private TimeSpan _monitoringRefreshInterval=TimeSpan.FromMinutes(10);
 
@@ -130,13 +152,13 @@ public sealed class MainForm : Form
     private void UpdateRow(StockRowLabel label,StockItem stock,StockQuote? q)
     {
         label.Tag=stock;
-        if(q is null){label.BoardText="";label.Text=$"{stock.NormalizedCode}  正在获取";label.ForeColor=Color.DimGray;_rowTips.SetToolTip(label,string.Empty);return;}
+        if(q is null){label.BoardText="";label.IndustryText="";label.Text=$"{stock.NormalizedCode}  正在获取";label.ForeColor=Color.DimGray;_rowTips.SetToolTip(label,string.Empty);return;}
         var code=FormatCode(q.Code,_settings.CodeDisplayMode);
         label.BoardText=_settings.ShowBoard?BoardMarker(q.Code):"";
         var sourceName=string.IsNullOrWhiteSpace(stock.DisplayName)?q.Name:stock.DisplayName;
         var name=FormatName(sourceName,_settings.NameDisplayMode);
-        if(_settings.NoteDisplayMode==2&&!string.IsNullOrWhiteSpace(stock.Note))name=stock.Note;
-        else if(_settings.NoteDisplayMode==1&&!string.IsNullOrWhiteSpace(stock.Note))name+=stock.Note;
+        var industryText="";decimal? industryChange=null;
+        if(_settings.ShowIndustryComparison&&name.Length>0&&q.Industry.Length>0&&_industryChanges.TryGetValue(q.Industry,out var boardChange)){industryChange=boardChange;industryText=$"（{q.Industry}{FormatSigned(boardChange,"+","-")}%）";name+=industryText;}
         var parts=new List<string>();
         if(code.Length>0)parts.Add(code);if(name.Length>0)parts.Add(name);
         if(_settings.PriceDisplayMode!=1){var price=q.Current.ToString("0.00");if(_settings.PriceDisplayMode==2)price+=FormatSigned(q.Change,"+","-");parts.Add(price);}
@@ -144,11 +166,30 @@ public sealed class MainForm : Form
         if(_settings.ShowSealVolume&&q.SealedVolume>0)parts.Add("封"+FormatSealVolume(q.SealedVolume));
         if(_settings.MonitorSealAbnormal&&_sealAbnormal.TryGetValue(stock.NormalizedCode,out var sealEvent)&&sealEvent.Expires>DateTime.Now)parts.Add($"封板异动10秒降{sealEvent.Drop:0.##}%");
         if((_settings.MonitorDragonTiger||_settings.MonitorSevereAbnormal)&&_monitoringInline.TryGetValue(stock.NormalizedCode,out var monitoringText)&&monitoringText.Length>0)parts.Add(monitoringText);
+        if(_settings.MonitorDragonTiger)
+        {
+            var turnoverText=AbnormalMovementMonitor.BuildTurnoverInlineStatus(stock.NormalizedCode,q);
+            if(turnoverText.Length>0)parts.Add(turnoverText);
+        }
         if(_settings.ShowVolume)parts.Add((q.Volume/10000m).ToString("0.00")+"万");
         if(_settings.ShowProfit&&stock.CostPrice is{}cost&&stock.Position is{}pos){var profit=(q.Current-cost)*pos;parts.Add("盈亏"+FormatSigned(profit,"+","-"));}
         label.Text=string.Join(_settings.AlignText?"  ":" ",parts);
         label.ForeColor=_settings.ChangeDisplayMode==1?Color.FromArgb(_settings.FlatColorArgb):q.Change>0?Color.FromArgb(_settings.RiseColorArgb):q.Change<0?Color.FromArgb(_settings.FallColorArgb):Color.FromArgb(_settings.FlatColorArgb);
-        var tips=new List<string>();var monitoringTip=_monitoringSummary.GetValueOrDefault(stock.NormalizedCode,string.Empty);if(monitoringTip.Length>0)tips.Add(monitoringTip);
+        label.IndustryText=industryText;
+        label.IndustryForeColor=industryChange is{}change&&_settings.ChangeDisplayMode is 0 or 3?change>0?Color.FromArgb(_settings.RiseColorArgb):change<0?Color.FromArgb(_settings.FallColorArgb):Color.FromArgb(_settings.FlatColorArgb):label.ForeColor;
+        var tips=new List<string>();var monitoringTip=_monitoringSummary.GetValueOrDefault(stock.NormalizedCode,string.Empty);
+        if(_settings.MonitorDragonTiger)
+        {
+            var turnoverLine=AbnormalMovementMonitor.BuildTurnoverSummaryLine(stock.NormalizedCode,q);
+            if(turnoverLine.Length>0)
+            {
+                const string dragonTigerHeader="龙虎榜异动：";
+                var headerIndex=monitoringTip.IndexOf(dragonTigerHeader,StringComparison.Ordinal);
+                if(headerIndex>=0)monitoringTip=monitoringTip.Insert(headerIndex+dragonTigerHeader.Length,Environment.NewLine+turnoverLine);
+                else monitoringTip=string.Join(Environment.NewLine,new[]{monitoringTip,dragonTigerHeader,turnoverLine}.Where(x=>x.Length>0));
+            }
+        }
+        if(monitoringTip.Length>0)tips.Add(monitoringTip);
         if(_settings.MonitorSealAbnormal&&_sealAbnormal.TryGetValue(stock.NormalizedCode,out sealEvent)&&sealEvent.Expires>DateTime.Now)
         {
             if(tips.Count==0)tips.Add(sourceName);
@@ -168,8 +209,11 @@ public sealed class MainForm : Form
         if(_refreshing||_settings.Stocks.Count==0)return;_refreshing=true;_cts?.Cancel();_cts?.Dispose();_cts=new CancellationTokenSource();
         try
         {
-            var data=await _quotes.GetQuotesAsync(_settings.Stocks.Select(x=>x.Code),_cts.Token);foreach(var pair in data){_latest[pair.Key]=pair.Value;if(pair.Value.IsPreMarketFallback)continue;if(!_history.TryGetValue(pair.Key,out var h)){h=[];_history[pair.Key]=h;}if(h.Count==0||h[^1].Price!=pair.Value.Current){h.Add((DateTime.Now,pair.Value.Current));if(h.Count>600)h.RemoveAt(0);}UpdateSealAbnormal(pair.Key,pair.Value);}
-            foreach(var stock in _settings.Stocks)if(_latest.TryGetValue(stock.NormalizedCode,out var q)&&!q.IsPreMarketFallback)CheckAlert(stock,q);await RefreshMonitoringAsync(_cts.Token);Render();var latest=data.Values.Where(x=>x.QuoteTime.HasValue).Select(x=>x.QuoteTime!.Value).DefaultIfEmpty(DateTime.Now).Max();_status.Text=$"{latest:HH:mm:ss} · {_settings.RefreshSeconds}s";
+            var quoteCodes=_settings.Stocks.Select(x=>x.Code).ToList();
+            if(_settings.MonitorDragonTiger||_settings.MonitorSevereAbnormal)quoteCodes.AddRange(_settings.Stocks.Where(x=>!AbnormalMovementMonitor.IsIndex(x.Code)).Select(x=>AbnormalMovementMonitor.BenchmarkCode(x.Code)));
+            var includeExtendedInfo=_settings.MonitorDragonTiger||_settings.ShowIndustryComparison;
+            var data=await _quotes.GetQuotesAsync(quoteCodes.Distinct(StringComparer.OrdinalIgnoreCase),_cts.Token,includeExtendedInfo);foreach(var pair in data){_latest[pair.Key]=pair.Value;if(pair.Value.IsPreMarketFallback)continue;if(!_history.TryGetValue(pair.Key,out var h)){h=[];_history[pair.Key]=h;}if(h.Count==0||h[^1].Price!=pair.Value.Current){h.Add((DateTime.Now,pair.Value.Current));if(h.Count>600)h.RemoveAt(0);}if(!AbnormalMovementMonitor.IsIndex(pair.Key))UpdateSealAbnormal(pair.Key,pair.Value);}
+            foreach(var stock in _settings.Stocks)if(_latest.TryGetValue(stock.NormalizedCode,out var q)&&!q.IsPreMarketFallback)CheckAlert(stock,q);await RefreshIndustryComparisonAsync(_cts.Token);await RefreshMonitoringAsync(_cts.Token);Render();var latest=data.Values.Where(x=>x.QuoteTime.HasValue).Select(x=>x.QuoteTime!.Value).DefaultIfEmpty(DateTime.Now).Max();_status.Text=$"{latest:HH:mm:ss} · {_settings.RefreshSeconds}s";
         }
         catch(OperationCanceledException){}catch(Exception ex){_status.Text=ex is HttpRequestException?"网络异常，等待重试":"刷新失败："+ex.Message;}finally{_refreshing=false;}
     }
@@ -224,6 +268,8 @@ public sealed class MainForm : Form
             var code=stock.NormalizedCode;var benchmarkCode=AbnormalMovementMonitor.BenchmarkCode(code);
             if(!_latest.TryGetValue(code,out var quote))continue;
             daily.TryGetValue(code,out var stockPoints);daily.TryGetValue(benchmarkCode,out var benchmarkPoints);
+            stockPoints=WithLiveDailyPoint(stockPoints??[],quote);
+            if(_latest.TryGetValue(benchmarkCode,out var benchmarkQuote)&&!benchmarkQuote.IsPreMarketFallback)benchmarkPoints=WithLiveDailyPoint(benchmarkPoints??[],benchmarkQuote);
             _monitoringSummary[code]=AbnormalMovementMonitor.BuildSummary(code,stock.DisplayName,quote,stockPoints??[],benchmarkPoints??[],_settings.MonitorDragonTiger,_settings.MonitorSevereAbnormal);
             var inlineParts=new List<string>();
             if(_settings.MonitorDragonTiger)inlineParts.Add(AbnormalMovementMonitor.BuildDragonTigerInlineStatus(code,quote,stockPoints??[],benchmarkPoints??[]));
@@ -240,6 +286,28 @@ public sealed class MainForm : Form
         _monitoringUpdated=DateTime.Now;
     }
 
+    private async Task RefreshIndustryComparisonAsync(CancellationToken cancellationToken)
+    {
+        if(!_settings.ShowIndustryComparison){_industryChanges.Clear();return;}
+        try
+        {
+            var changes=await _industries.GetChangePercentsAsync(cancellationToken);
+            _industryChanges.Clear();
+            foreach(var pair in changes)_industryChanges[pair.Key]=pair.Value;
+        }
+        catch(OperationCanceledException){throw;}
+        catch(HttpRequestException){}
+        catch(InvalidDataException){}
+    }
+
+    private static IReadOnlyList<IntradayPoint> WithLiveDailyPoint(IReadOnlyList<IntradayPoint> points,StockQuote quote)
+    {
+        if(quote.Current<=0||quote.IsPreMarketFallback)return points;
+        var date=(quote.QuoteTime??DateTime.Now).Date;var result=points.Where(x=>x.Time.Date!=date).ToList();
+        result.Add(new IntradayPoint(date,quote.Open,quote.High,quote.Low,quote.Current,quote.Volume,quote.Amount,quote.Current));
+        return result.OrderBy(x=>x.Time).ToList();
+    }
+
     private TimeSpan MonitoringRefreshInterval(decimal? distance)=>distance switch
     {
         <=10m=>TimeSpan.FromSeconds(_settings.RefreshSeconds),
@@ -248,12 +316,10 @@ public sealed class MainForm : Form
         _=>TimeSpan.FromMinutes(10)
     };
 
-    private async void OpenDetails(StockItem stock)
+    private void OpenDetails(StockItem stock)
     {
         if(!_latest.TryGetValue(stock.NormalizedCode,out var q)){MessageBox.Show("尚未获取到该股票行情。","股价图",MessageBoxButtons.OK,MessageBoxIcon.Information);return;}
-        _history.TryGetValue(stock.NormalizedCode,out var h);var form=new StockDetailsForm(stock,q,h??[]);form.Show(this);
-        try{var data=await _charts.GetChartAsync(stock.NormalizedCode,_settings.ChartType);if(!form.IsDisposed)form.SetChartData(data,_settings.ChartType);}
-        catch(Exception ex){if(!form.IsDisposed)form.SetChartError("分时行情加载失败："+ex.Message);}
+        _history.TryGetValue(stock.NormalizedCode,out var h);var form=new StockDetailsForm(stock,q,h??[],_settings.ChartType,_settings.RefreshSeconds);form.Show(this);
     }
     private void OpenSettings(){SetMouseThrough(false);using var d=new SettingsForm(_settings);if(d.ShowDialog(this)==DialogResult.OK){d.Result.Left=Left;d.Result.Top=Top;_settings=d.Result;_monitoringUpdated=DateTime.MinValue;Save();ApplySettings(false);_ = RefreshAsync();}else ApplyMouseThrough();}
     private void ToggleVisible(){if(Visible){Hide();}else{Show();Activate();}}
@@ -266,7 +332,7 @@ public sealed class MainForm : Form
     private void EndDrag(object? s,MouseEventArgs e){if(e.Button==MouseButtons.Left){_settings.Left=Left;_settings.Top=Top;Save();}}
     private void AssignMenu(Control c){c.ContextMenuStrip=_menu;foreach(Control x in c.Controls)AssignMenu(x);}
     protected override void WndProc(ref Message m){if(m.Msg==WmHotKey&&m.WParam.ToInt32()==HotKeyId){if(_settings.BossKeyExits){Close();return;}ToggleVisible();}base.WndProc(ref m);}
-    protected override void OnFormClosed(FormClosedEventArgs e){_timer.Stop();_cts?.Cancel();UnregisterHotKey(Handle,HotKeyId);_tray.Visible=false;_tray.Dispose();_rowTips.Dispose();DisposeRows();_rowFont?.Dispose();_rowFont=null;_quotes.Dispose();_charts.Dispose();base.OnFormClosed(e);}
+    protected override void OnFormClosed(FormClosedEventArgs e){_timer.Stop();_cts?.Cancel();UnregisterHotKey(Handle,HotKeyId);_tray.Visible=false;_tray.Dispose();_rowTips.Dispose();DisposeRows();_rowFont?.Dispose();_rowFont=null;_quotes.Dispose();_industries.Dispose();_charts.Dispose();base.OnFormClosed(e);}
     [DllImport("user32.dll")]private static extern bool RegisterHotKey(IntPtr hWnd,int id,int fsModifiers,int vk);
     [DllImport("user32.dll")]private static extern bool UnregisterHotKey(IntPtr hWnd,int id);
     [DllImport("user32.dll",EntryPoint="GetWindowLongW")]private static extern int GetWindowLong(IntPtr hWnd,int index);

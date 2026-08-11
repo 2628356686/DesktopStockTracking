@@ -16,11 +16,11 @@ public sealed class AppSettings
     public int NameDisplayMode { get; set; } = 0;
     public int PriceDisplayMode { get; set; } = 0;
     public int ChangeDisplayMode { get; set; } = 0;
-    public int NoteDisplayMode { get; set; } = 0;
     public bool EnableChart { get; set; } = true;
     public string ChartType { get; set; } = "分时图";
     public bool ShowCode { get; set; } = true;
     public bool ShowBoard { get; set; }
+    public bool ShowIndustryComparison { get; set; }
     public bool ShowName { get; set; } = true;
     public bool ShowCurrent { get; set; } = true;
     public bool ShowChange { get; set; }
@@ -28,7 +28,6 @@ public sealed class AppSettings
     public bool ShowVolume { get; set; }
     public bool ShowSealVolume { get; set; }
     public bool ShowProfit { get; set; }
-    public bool ShowNote { get; set; }
     public bool MonitorDragonTiger { get; set; }
     public bool MonitorSevereAbnormal { get; set; }
     public bool MonitorSealAbnormal { get; set; }
@@ -63,7 +62,6 @@ public sealed class AppSettings
         NameDisplayMode = Math.Clamp(NameDisplayMode, 0, 6);
         PriceDisplayMode = Math.Clamp(PriceDisplayMode, 0, 2);
         ChangeDisplayMode = Math.Clamp(ChangeDisplayMode, 0, 2);
-        NoteDisplayMode = Math.Clamp(NoteDisplayMode, 0, 2);
         FontFamily = string.IsNullOrWhiteSpace(FontFamily) ? "Microsoft YaHei UI" : FontFamily;
         BossKeyModifiers = string.IsNullOrWhiteSpace(BossKeyModifiers) ? "Ctrl+Alt" : BossKeyModifiers;
         BossKey = string.IsNullOrWhiteSpace(BossKey) ? "T" : BossKey.ToUpperInvariant();

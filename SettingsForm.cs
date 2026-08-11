@@ -12,11 +12,16 @@ public sealed class SettingsForm : Form
     private readonly TextBox _search = new();
     private readonly ListBox _suggestions = new();
     private readonly SinaStockSearchService _searchService = new();
+    private readonly SinaRankingService _rankingService = new();
+    private readonly SinaQuoteService _rankingQuoteService = new();
     private readonly System.Windows.Forms.Timer _searchTimer = new() { Interval = 180 };
     private CancellationTokenSource? _searchCts;
+    private CancellationTokenSource? _rankingCts;
+    private CancellationTokenSource? _rankingChartCts;
     private readonly ComboBox _codeMode = Combo("完整代码", "最后3位代码", "最后2位代码", "不显示");
     private readonly CheckBox _showBoard = new() { Text = "显示证券板块", AutoSize = true };
     private readonly ComboBox _nameMode = Combo("完整名称", "前2个字", "第1个字", "最后2个字", "最后1个字", "不显示", "强制4字符");
+    private readonly CheckBox _industryComparison = new() { Text = "板块对比", AutoSize = true };
     private readonly ComboBox _priceMode = Combo("显示现价", "不显示", "显示现价+涨跌额");
     private readonly ComboBox _changeMode = Combo("红绿显示", "黑色显示", "不显示", "自定义颜色");
     private readonly CheckBox _sealVolume = new() { Text = "涨/跌停时显示封单量", AutoSize = true };
@@ -25,7 +30,6 @@ public sealed class SettingsForm : Form
     private readonly ComboBox _chartOpacity = Combo("同主界面", "30%", "50%", "70%", "100%");
     private readonly CheckBox _quickChart = new() { Text = "显示快速切换列表", AutoSize = true };
     private readonly CheckBox _advancedChart = new() { Text = "高级筛选", AutoSize = true };
-    private readonly ComboBox _noteMode = Combo("不显示", "附加", "替换");
     private readonly Label _sample = new() { Text = "sh600000  浦发银行  10.00  +1.20%", TextAlign = ContentAlignment.MiddleCenter };
     private readonly ComboBox _fontSize = Combo("9", "10", "11", "12", "13", "14", "16", "18", "20");
     private readonly ComboBox _spacing = Combo("无", "极窄", "窄", "中等", "较宽", "宽");
@@ -42,14 +46,14 @@ public sealed class SettingsForm : Form
     private readonly CheckBox _details = new() { Text = "开启详情显示", AutoSize = true };
     private readonly RadioButton _singleClick = new() { Text = "单击相应股票时", AutoSize = true };
     private readonly RadioButton _doubleClick = new() { Text = "双击相应股票时", Checked = true, AutoSize = true };
-    private readonly CheckBox _mouseThrough = new() { Text = "鼠标穿透", AutoSize = true };
-    private readonly CheckBox _balloon = new() { Text = "股价超限时气泡提醒", AutoSize = true };
-    private readonly CheckBox _sound = new() { Text = "股价超限时声音提醒", AutoSize = true };
-    private readonly CheckBox _align = new() { Text = "文字对齐", AutoSize = true };
-    private readonly CheckBox _profit = new() { Text = "显示持仓盈亏", AutoSize = true };
     private readonly CheckBox _monitorDragonTiger = new() { Text = "龙虎榜异动", AutoSize = true };
     private readonly CheckBox _monitorSevereAbnormal = new() { Text = "严重异常异动", AutoSize = true };
     private readonly CheckBox _monitorSealAbnormal = new() { Text = "封板异动", AutoSize = true };
+    private readonly DataGridView _hotStockRanking = RankingGrid("热度");
+    private readonly DataGridView _capitalInflowRanking = RankingGrid("净流入");
+    private readonly DataGridView _capitalOutflowRanking = RankingGrid("净流出");
+    private readonly Button _refreshRankings = new() { Text = "刷新排行", AutoSize = true, UseVisualStyleBackColor = true };
+    private readonly Label _rankingStatus = new() { Text = "等待加载", AutoSize = true, ForeColor = Color.DimGray };
     private readonly ToolTip _tips = new();
 
     [Browsable(false)]
@@ -63,7 +67,7 @@ public sealed class SettingsForm : Form
         MaximizeBox = true; MinimizeBox = false; ClientSize = new Size(600, 500); MinimumSize = new Size(355, 349);
         Font = new Font("宋体", 9);
         var tabs = new TabControl();
-        tabs.TabPages.Add(BuildStocksPage()); tabs.TabPages.Add(BuildDisplayPage()); tabs.TabPages.Add(BuildAdvancedPage()); tabs.TabPages.Add(BuildChartPage()); tabs.TabPages.Add(BuildMonitorPage()); tabs.TabPages.Add(BuildOtherPage());
+        tabs.TabPages.Add(BuildStocksPage()); tabs.TabPages.Add(BuildRankingPage()); tabs.TabPages.Add(BuildDisplayPage()); tabs.TabPages.Add(BuildAdvancedPage()); tabs.TabPages.Add(BuildChartPage()); tabs.TabPages.Add(BuildMonitorPage()); tabs.TabPages.Add(BuildOtherPage());
         var ok = new Button { Text = "确定", Size = new Size(80, 29), FlatStyle = FlatStyle.System, UseVisualStyleBackColor = true };
         var cancel = new Button { Text = "取消", Size = new Size(80, 29), FlatStyle = FlatStyle.System, UseVisualStyleBackColor = true, DialogResult = DialogResult.Cancel };
         ok.Click += (_, _) => { if (ReadControls()) { DialogResult = DialogResult.OK; Close(); } };
@@ -77,6 +81,7 @@ public sealed class SettingsForm : Form
         ClientSizeChanged += (_, _) => LayoutControls();
         LayoutControls();
         LoadControls(source);
+        Shown+=async(_,_)=>await LoadRankingsAsync();
     }
 
     private TabPage BuildStocksPage()
@@ -110,17 +115,92 @@ public sealed class SettingsForm : Form
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,50));layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,50));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent,50));layout.RowStyles.Add(new RowStyle(SizeType.Percent,50));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,34));
         var code=NewGroup("股票代码");var codeTable=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(10,16,10,8),ColumnCount=1,RowCount=2};codeTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));codeTable.RowStyles.Add(new RowStyle(SizeType.Absolute,34));codeTable.RowStyles.Add(new RowStyle(SizeType.Percent,100));_codeMode.Dock=DockStyle.Fill;_codeMode.Margin=new Padding(0,2,0,5);codeTable.Controls.Add(_codeMode,0,0);_showBoard.Anchor=AnchorStyles.Left;_showBoard.Margin=new Padding(2,5,0,2);codeTable.Controls.Add(_showBoard,0,1);code.Controls.Add(codeTable);
-        var name=NewGroup("股票名称");var nameTable=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(8,8,8,5),ColumnCount=2,RowCount=2};nameTable.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,68));nameTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));nameTable.RowStyles.Add(new RowStyle(SizeType.Percent,50));nameTable.RowStyles.Add(new RowStyle(SizeType.Percent,50));_nameMode.Dock=DockStyle.Fill;_nameMode.Margin=new Padding(0,2,0,3);nameTable.Controls.Add(_nameMode,0,0);nameTable.SetColumnSpan(_nameMode,2);nameTable.Controls.Add(new Label{Text="显示备注：",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleRight},0,1);_noteMode.Dock=DockStyle.Fill;_noteMode.Margin=new Padding(0,2,0,2);nameTable.Controls.Add(_noteMode,1,1);name.Controls.Add(nameTable);
+        var name=NewGroup("股票名称");var nameTable=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(8,8,8,5),ColumnCount=1,RowCount=2};nameTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));nameTable.RowStyles.Add(new RowStyle(SizeType.Percent,50));nameTable.RowStyles.Add(new RowStyle(SizeType.Percent,50));_nameMode.Dock=DockStyle.Fill;_nameMode.Margin=new Padding(0,2,0,3);nameTable.Controls.Add(_nameMode,0,0);_industryComparison.Anchor=AnchorStyles.Left;_industryComparison.Margin=new Padding(2,4,0,2);nameTable.Controls.Add(_industryComparison,0,1);name.Controls.Add(nameTable);_tips.SetToolTip(_industryComparison,"在股票名称后显示所属申万行业板块的实时涨跌幅。");
         var price=NewGroup("现价及涨跌额");var priceHost=Host();SetupWide(_priceMode);priceHost.Controls.Add(_priceMode);price.Controls.Add(priceHost);
         var change=NewGroup("涨跌幅");var changeTable=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(8,8,8,6),ColumnCount=1,RowCount=2};changeTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));changeTable.RowStyles.Add(new RowStyle(SizeType.Percent,55));changeTable.RowStyles.Add(new RowStyle(SizeType.Percent,45));_changeMode.Dock=DockStyle.Fill;_changeMode.Margin=new Padding(0,2,0,4);changeTable.Controls.Add(_changeMode,0,0);_sealVolume.Dock=DockStyle.None;_sealVolume.Anchor=AnchorStyles.Left;_sealVolume.Margin=new Padding(2,2,0,2);changeTable.Controls.Add(_sealVolume,0,1);change.Controls.Add(changeTable);
         layout.Controls.Add(code,0,0);layout.Controls.Add(name,1,0);layout.Controls.Add(price,0,1);layout.Controls.Add(change,1,1);
         var samplePanel=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=2,Margin=new Padding(8,0,8,0)};samplePanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,48));samplePanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));samplePanel.Controls.Add(new Label{Text="示例：",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleRight},0,0);_sample.Dock=DockStyle.Fill;samplePanel.Controls.Add(_sample,1,0);layout.Controls.Add(samplePanel,0,2);layout.SetColumnSpan(samplePanel,2);
-        foreach(var box in new[]{_codeMode,_nameMode,_priceMode,_changeMode,_noteMode})box.SelectedIndexChanged+=(_,_)=>UpdateSample(); _showBoard.CheckedChanged+=(_,_)=>UpdateSample(); _sealVolume.CheckedChanged+=(_,_)=>UpdateSample();
+        foreach(var box in new[]{_codeMode,_nameMode,_priceMode,_changeMode})box.SelectedIndexChanged+=(_,_)=>UpdateSample(); _showBoard.CheckedChanged+=(_,_)=>UpdateSample(); _industryComparison.CheckedChanged+=(_,_)=>UpdateSample(); _sealVolume.CheckedChanged+=(_,_)=>UpdateSample();
         _changeMode.SelectedIndexChanged+=(_,_)=>{_sealVolume.Enabled=_changeMode.SelectedIndex!=2;if(_changeMode.SelectedIndex==3)ChooseCustomColors();};
         page.Controls.Add(layout);return page;
         static GroupBox NewGroup(string text)=>new(){Text=text,Dock=DockStyle.Fill,Margin=new Padding(7,5,7,5)};
         static Panel Host()=>new(){Dock=DockStyle.Fill,Padding=new Padding(10,20,10,10)};
         static void SetupWide(ComboBox box){box.Dock=DockStyle.Top;box.Margin=Padding.Empty;}
+    }
+
+    private TabPage BuildRankingPage()
+    {
+        var page=Page("排行");
+        var layout=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(8,8,8,6),ColumnCount=1,RowCount=2};
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+        var toolbar=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=2,RowCount=1,Margin=Padding.Empty};
+        toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        _rankingStatus.Anchor=AnchorStyles.Left;_rankingStatus.Margin=new Padding(4,0,4,0);toolbar.Controls.Add(_rankingStatus,0,0);
+        _refreshRankings.Anchor=AnchorStyles.Right;_refreshRankings.Margin=new Padding(4,2,2,2);_refreshRankings.Click+=async(_,_)=>await LoadRankingsAsync();toolbar.Controls.Add(_refreshRankings,1,0);
+        var rankingTabs=new TabControl{Dock=DockStyle.Fill,Margin=new Padding(0,3,0,0)};
+        rankingTabs.TabPages.Add(RankingTab("热股排行",_hotStockRanking));rankingTabs.TabPages.Add(RankingTab("流入排行",_capitalInflowRanking));rankingTabs.TabPages.Add(RankingTab("流出排行",_capitalOutflowRanking));
+        ConfigureRankingContextMenu(_hotStockRanking,_capitalInflowRanking,_capitalOutflowRanking);
+        layout.Controls.Add(toolbar,0,0);layout.Controls.Add(rankingTabs,0,1);
+        page.Controls.Add(layout);return page;
+        static TabPage RankingTab(string title,Control grid){var tab=new TabPage(title){Padding=new Padding(4)};tab.Controls.Add(grid);return tab;}
+    }
+
+    private void ConfigureRankingContextMenu(params DataGridView[] grids)
+    {
+        var menu=new ContextMenuStrip();
+        var add=menu.Items.Add("加入关注的股票");
+        menu.Items.Add(new ToolStripSeparator());
+        var chart=menu.Items.Add("查看分时图");
+        var kline=menu.Items.Add("查看K线图");
+        menu.Opening+=(_,e)=>
+        {
+            if(menu.SourceControl is not DataGridView grid||grid.CurrentRow?.Tag is not string code)
+            {
+                e.Cancel=true;return;
+            }
+            var exists=IsDuplicate(code);add.Text=exists?"已在关注列表中":"加入关注的股票";add.Enabled=!exists;
+        };
+        add.Click+=(sender,e)=>AddSelectedRankingStock(menu);
+        chart.Click+=async(sender,e)=>await OpenSelectedRankingChartAsync(menu,"分时图");
+        kline.Click+=async(sender,e)=>await OpenSelectedRankingChartAsync(menu,"日K线");
+        foreach(var grid in grids)
+        {
+            grid.ContextMenuStrip=menu;
+            grid.MouseDown+=(_,e)=>
+            {
+                if(e.Button!=MouseButtons.Right)return;
+                var hit=grid.HitTest(e.X,e.Y);if(hit.RowIndex<0)return;
+                grid.ClearSelection();grid.Rows[hit.RowIndex].Selected=true;grid.CurrentCell=grid.Rows[hit.RowIndex].Cells[0];
+            };
+        }
+    }
+
+    private void AddSelectedRankingStock(ContextMenuStrip menu)
+    {
+        if(menu.SourceControl is not DataGridView grid||grid.CurrentRow?.Tag is not string code||IsDuplicate(code))return;
+        var name=Convert.ToString(grid.CurrentRow.Cells[2].Value);if(string.IsNullOrWhiteSpace(name))name=code;
+        AddStockRow(new StockItem{Code=code,DisplayName=name});_rankingStatus.Text=$"已加入关注：{name}";
+    }
+
+    private async Task OpenSelectedRankingChartAsync(ContextMenuStrip menu,string chartType)
+    {
+        if(menu.SourceControl is not DataGridView grid||grid.CurrentRow?.Tag is not string code)return;
+        var name=Convert.ToString(grid.CurrentRow.Cells[2].Value);if(string.IsNullOrWhiteSpace(name))name=code;
+        _rankingChartCts?.Cancel();_rankingChartCts?.Dispose();_rankingChartCts=new CancellationTokenSource();
+        var cancellationToken=_rankingChartCts.Token;_rankingStatus.Text=$"正在获取 {name} 的{chartType}行情...";
+        try
+        {
+            var quotes=await _rankingQuoteService.GetQuotesAsync([code],cancellationToken);
+            if(cancellationToken.IsCancellationRequested||IsDisposed)return;
+            var normalized=StockCode.Normalize(code);
+            if(!quotes.TryGetValue(normalized,out var quote)){MessageBox.Show(this,"暂时无法获取该股票行情。","分时图",MessageBoxButtons.OK,MessageBoxIcon.Information);return;}
+            var stock=new StockItem{Code=code,DisplayName=name};
+            var form=new StockDetailsForm(stock,quote,[],chartType,(int)Number(_refresh.Text,3));form.Show(this);
+            _rankingStatus.Text=$"已打开{chartType}：{name}";
+        }
+        catch(OperationCanceledException){}
+        catch(Exception ex){if(!IsDisposed)MessageBox.Show(this,chartType+"打开失败："+ex.Message,chartType,MessageBoxButtons.OK,MessageBoxIcon.Warning);}
     }
 
     private TabPage BuildAdvancedPage()
@@ -182,12 +262,12 @@ public sealed class SettingsForm : Form
 
     private TabPage BuildOtherPage()
     {
-        var page=Page("其他"); Place(_align,22,19,72,16); Place(_balloon,185,45,132,16); _balloon.Anchor=AnchorStyles.Top|AnchorStyles.Right; Place(_sound,185,71,132,16); _sound.Anchor=AnchorStyles.Top|AnchorStyles.Right; Place(_mouseThrough,185,95,72,16); _mouseThrough.Anchor=AnchorStyles.Top|AnchorStyles.Right; Place(_profit,22,45,120,16);
+        var page=Page("其他");
         var divider=new Label{BackColor=Color.Silver,Location=new Point(5,214),Size=new Size(313,1),Anchor=AnchorStyles.Bottom|AnchorStyles.Left|AnchorStyles.Right};
         var export=new Button{Text="导出配置到文件(&E)",Location=new Point(28,225),Size=new Size(120,26),Anchor=AnchorStyles.Bottom|AnchorStyles.Left,UseVisualStyleBackColor=true};
         var import=new Button{Text="从文件导入配置(&I)",Location=new Point(173,225),Size=new Size(120,26),Anchor=AnchorStyles.Bottom|AnchorStyles.Right,UseVisualStyleBackColor=true};
         export.Click+=ExportConfig;import.Click+=ImportConfig;
-        page.Controls.Add(_align);page.Controls.Add(_balloon);page.Controls.Add(_sound);page.Controls.Add(_mouseThrough);page.Controls.Add(_profit);page.Controls.Add(divider);page.Controls.Add(export);page.Controls.Add(import);return page;
+        page.Controls.Add(divider);page.Controls.Add(export);page.Controls.Add(import);return page;
     }
 
     private TabPage BuildMonitorPage()
@@ -201,7 +281,7 @@ public sealed class SettingsForm : Form
         _monitorSealAbnormal.Anchor=AnchorStyles.Left;_monitorSealAbnormal.Margin=new Padding(8,6,8,6);
         layout.Controls.Add(_monitorDragonTiger,0,0);layout.Controls.Add(_monitorSevereAbnormal,0,1);layout.Controls.Add(_monitorSealAbnormal,0,2);
         layout.Controls.Add(new Label{Text="启用后，将鼠标悬浮在关注股票行上即可查看监控结果。",Dock=DockStyle.Fill,ForeColor=Color.DimGray,TextAlign=ContentAlignment.MiddleLeft,Margin=new Padding(8,4,8,4)},0,3);
-        _tips.SetToolTip(_monitorDragonTiger,"龙虎榜异动规则：\r\n沪深主板：单日偏离±7%、振幅15%，或3日累计偏离±20%；\r\n创业板/科创板：单日涨跌±15%、振幅30%，或3日累计偏离±30%；\r\n北交所：单日涨跌±20%、振幅30%，或3日累计偏离±40%。\r\n换手率指标因行情源不提供可靠流通股本，暂不计算。");
+        _tips.SetToolTip(_monitorDragonTiger,"龙虎榜异动规则：\r\n沪深主板：单日偏离±7%、振幅15%、换手率20%，或3日累计偏离±20%；\r\n创业板/科创板：单日涨跌±15%、振幅30%、换手率30%，或3日累计偏离±30%；\r\n北交所：单日涨跌±20%、振幅30%、换手率20%，或3日累计偏离±40%。");
         _tips.SetToolTip(_monitorSevereAbnormal,"严重异常异动规则：\r\n沪深主板、创业板、科创板：10日偏离+100%/-50%，30日偏离+200%/-70%；\r\n北交所：10日偏离+150%/-60%，30日偏离+300%/-75%。\r\n连续出现多次同向普通异动需结合交易所公告重置口径，暂不自动计算。");
         _tips.SetToolTip(_monitorSealAbnormal,"封板异动规则：\r\n股票处于涨停或跌停封板状态时，若约10秒内封单量下降达到30%，触发封板异动提示。\r\n检测频率跟随设置中的行情刷新时间，触发结果保留30秒。");
         page.Controls.Add(layout);return page;
@@ -210,32 +290,89 @@ public sealed class SettingsForm : Form
     private void LoadControls(AppSettings s)
     {
         foreach (var stock in s.Stocks) AddStockRow(CloneStock(stock));
-        Select(_codeMode, s.CodeDisplayMode); Select(_nameMode, s.NameDisplayMode); Select(_priceMode, s.PriceDisplayMode); Select(_changeMode, s.ChangeDisplayMode); Select(_noteMode, s.NoteDisplayMode); _showBoard.Checked=s.ShowBoard;
+        Select(_codeMode, s.CodeDisplayMode); Select(_nameMode, s.NameDisplayMode); Select(_priceMode, s.PriceDisplayMode); Select(_changeMode, s.ChangeDisplayMode); _showBoard.Checked=s.ShowBoard; _industryComparison.Checked=s.ShowIndustryComparison;
         _sealVolume.Checked=s.ShowSealVolume;
         _fontSize.Text=s.FontSize.ToString("0"); _spacing.SelectedIndex=Math.Clamp(s.RowSpacing/3,0,_spacing.Items.Count-1); _opacity.Text=s.OpacityPercent+"%"; _refresh.Text=s.RefreshSeconds+"s";
         _background.BackColor=Color.FromArgb(s.BackgroundColorArgb); _boss.Checked=s.EnableBossKey; _bossShortcut.Text=FormatShortcut(s.BossKeyModifiers,s.BossKey); _bossShortcut.Enabled=s.EnableBossKey; _bossExit.Checked=s.BossKeyExits; _bossHide.Checked=!s.BossKeyExits;
         _topMost.Checked=s.AlwaysOnTop; _tray.Checked=s.ShowTrayIcon; _chart.Checked=s.EnableChart; _chartType.Text=s.ChartType; _details.Checked=s.OpenDetailsOnDoubleClick; _doubleClick.Checked=s.OpenDetailsOnDoubleClick; _singleClick.Checked=!s.OpenDetailsOnDoubleClick;
-        _mouseThrough.Checked=s.MouseThrough; _balloon.Checked=s.EnableBalloonAlert; _sound.Checked=s.EnableSoundAlert; _align.Checked=s.AlignText; _profit.Checked=s.ShowProfit; _monitorDragonTiger.Checked=s.MonitorDragonTiger; _monitorSevereAbnormal.Checked=s.MonitorSevereAbnormal; _monitorSealAbnormal.Checked=s.MonitorSealAbnormal; UpdateSample();
+        _monitorDragonTiger.Checked=s.MonitorDragonTiger; _monitorSevereAbnormal.Checked=s.MonitorSevereAbnormal; _monitorSealAbnormal.Checked=s.MonitorSealAbnormal; UpdateSample();
     }
 
     private bool ReadControls()
     {
-        Result.Stocks=_stocks.Rows.Cast<DataGridViewRow>().Select(x=>(StockItem)x.Tag!).ToList(); Result.CodeDisplayMode=_codeMode.SelectedIndex; Result.ShowBoard=_showBoard.Checked; Result.NameDisplayMode=_nameMode.SelectedIndex; Result.PriceDisplayMode=_priceMode.SelectedIndex; Result.ChangeDisplayMode=_changeMode.SelectedIndex; Result.NoteDisplayMode=_noteMode.SelectedIndex;
+        Result.Stocks=_stocks.Rows.Cast<DataGridViewRow>().Select(x=>(StockItem)x.Tag!).ToList(); Result.CodeDisplayMode=_codeMode.SelectedIndex; Result.ShowBoard=_showBoard.Checked; Result.NameDisplayMode=_nameMode.SelectedIndex; Result.ShowIndustryComparison=_industryComparison.Checked; Result.PriceDisplayMode=_priceMode.SelectedIndex; Result.ChangeDisplayMode=_changeMode.SelectedIndex;
         Result.ShowSealVolume=_sealVolume.Checked; Result.FontSize=(float)Number(_fontSize.Text,11); Result.RowSpacing=_spacing.SelectedIndex*3; Result.OpacityPercent=(int)Number(_opacity.Text,100); Result.RefreshSeconds=(int)Number(_refresh.Text,3); Result.BackgroundColorArgb=_background.BackColor.ToArgb(); Result.TransparentBackground=_background.BackColor.ToArgb()==Color.White.ToArgb();
-        Result.EnableBossKey=_boss.Checked; ReadShortcut(_bossShortcut.Text,out var modifiers,out var key); Result.BossKeyModifiers=modifiers; Result.BossKey=key; Result.BossKeyExits=_bossExit.Checked; Result.AlwaysOnTop=_topMost.Checked; Result.ShowTrayIcon=_tray.Checked; Result.EnableChart=_chart.Checked; Result.ChartType=_chartType.Text; Result.OpenDetailsOnDoubleClick=_doubleClick.Checked; Result.MouseThrough=_mouseThrough.Checked; Result.EnableBalloonAlert=_balloon.Checked; Result.EnableSoundAlert=_sound.Checked; Result.AlignText=_align.Checked; Result.ShowProfit=_profit.Checked; Result.MonitorDragonTiger=_monitorDragonTiger.Checked; Result.MonitorSevereAbnormal=_monitorSevereAbnormal.Checked; Result.MonitorSealAbnormal=_monitorSealAbnormal.Checked; Result.ShowCode=Result.CodeDisplayMode!=3; Result.ShowName=Result.NameDisplayMode!=5; Result.ShowCurrent=Result.PriceDisplayMode!=1; Result.ShowChange=Result.PriceDisplayMode==2; Result.ShowChangePercent=Result.ChangeDisplayMode!=2; Result.Normalize(); return true;
+        Result.EnableBossKey=_boss.Checked; ReadShortcut(_bossShortcut.Text,out var modifiers,out var key); Result.BossKeyModifiers=modifiers; Result.BossKey=key; Result.BossKeyExits=_bossExit.Checked; Result.AlwaysOnTop=_topMost.Checked; Result.ShowTrayIcon=_tray.Checked; Result.EnableChart=_chart.Checked; Result.ChartType=_chartType.Text; Result.OpenDetailsOnDoubleClick=_doubleClick.Checked; Result.MonitorDragonTiger=_monitorDragonTiger.Checked; Result.MonitorSevereAbnormal=_monitorSevereAbnormal.Checked; Result.MonitorSealAbnormal=_monitorSealAbnormal.Checked; Result.ShowCode=Result.CodeDisplayMode!=3; Result.ShowName=Result.NameDisplayMode!=5; Result.ShowCurrent=Result.PriceDisplayMode!=1; Result.ShowChange=Result.PriceDisplayMode==2; Result.ShowChangePercent=Result.ChangeDisplayMode!=2; Result.Normalize(); return true;
     }
 
     private void UpdateSample()
     {
         var code=_codeMode.SelectedIndex switch{1=>"000",2=>"00",3=>"",_=>"sh600000"};if(_showBoard.Checked)code="主 "+code;
         var baseName=_nameMode.SelectedIndex switch{1=>"浦发",2=>"浦",3=>"银行",4=>"行",5=>"",6=>"浦发银行",_=>"浦发银行"};
-        var name=_noteMode.SelectedIndex switch{1=>baseName+"(自选)",2=>"自选",_=>baseName};
+        var name=baseName;if(_industryComparison.Checked&&name.Length>0)name+="（银行+0.85%）";
         var price=_priceMode.SelectedIndex switch{1=>"",2=>"10.00  +0.12",_=>"10.00"};
         var change=_changeMode.SelectedIndex==2?"":"+1.20%";
         var sealedText=_sealVolume.Checked?"(999手)":"";
         _sample.Text=string.Join("  ",new[]{code,name,price,change,sealedText}.Where(x=>x.Length>0));
         _sample.ForeColor=_changeMode.SelectedIndex switch{1=>Color.FromArgb(Result.FlatColorArgb),3=>Color.FromArgb(Result.RiseColorArgb),2=>SystemColors.ControlText,_=>Color.Red};
     }
+
+    private async Task LoadRankingsAsync()
+    {
+        _rankingCts?.Cancel();_rankingCts?.Dispose();_rankingCts=new CancellationTokenSource();
+        var cancellationToken=_rankingCts.Token;
+        _refreshRankings.Enabled=false;_rankingStatus.Text="正在加载排行...";_tips.SetToolTip(_rankingStatus,string.Empty);
+        try
+        {
+            var results=await Task.WhenAll(
+                LoadRankingAsync("热股排行",_rankingService.GetHotStocksAsync(cancellationToken),_hotStockRanking,0,cancellationToken),
+                LoadRankingAsync("流入排行",_rankingService.GetCapitalInflowAsync(cancellationToken),_capitalInflowRanking,1,cancellationToken),
+                LoadRankingAsync("流出排行",_rankingService.GetCapitalOutflowAsync(cancellationToken),_capitalOutflowRanking,2,cancellationToken));
+            if(cancellationToken.IsCancellationRequested||IsDisposed)return;
+            var errors=results.Where(x=>!string.IsNullOrWhiteSpace(x)).ToArray();
+            _rankingStatus.Text=errors.Length==0?$"更新于 {DateTime.Now:HH:mm:ss}":errors.Length==3?"排行加载失败":$"部分加载失败（{errors.Length}项）";
+            _tips.SetToolTip(_rankingStatus,string.Join(Environment.NewLine,errors));
+        }
+        finally
+        {
+            if(!IsDisposed&&!cancellationToken.IsCancellationRequested)_refreshRankings.Enabled=true;
+        }
+    }
+
+    private async Task<string?> LoadRankingAsync(string title,Task<IReadOnlyList<StockRankingItem>> request,DataGridView grid,int type,CancellationToken cancellationToken)
+    {
+        try
+        {
+            var items=await request;
+            if(cancellationToken.IsCancellationRequested||IsDisposed)return null;
+            FillRankingGrid(grid,items,type);return null;
+        }
+        catch(OperationCanceledException){return null;}
+        catch(Exception ex){return title+"："+ex.Message;}
+    }
+
+    private static void FillRankingGrid(DataGridView grid,IReadOnlyList<StockRankingItem> items,int type)
+    {
+        grid.Rows.Clear();
+        for(var i=0;i<items.Count;i++)
+        {
+            var item=items[i];
+            var metric=type==0?item.Metric.ToString("N0"):FormatMoney(type==2?Math.Abs(item.Metric):item.Metric);
+            var change=item.ChangePercent.ToString("+0.00;-0.00;0.00")+"%";
+            var rowIndex=grid.Rows.Add(i+1,item.Code,item.Name,item.Industry,change,metric);grid.Rows[rowIndex].Tag=item.Code;
+            grid.Rows[rowIndex].Cells[4].Style.ForeColor=item.ChangePercent>0?Color.Red:item.ChangePercent<0?Color.FromArgb(0,145,70):Color.Black;
+            grid.Rows[rowIndex].Cells[5].Style.ForeColor=type switch{1=>Color.Red,2=>Color.FromArgb(0,145,70),_=>Color.FromArgb(35,90,160)};
+        }
+    }
+
+    private static string FormatMoney(decimal value)
+    {
+        var absolute=Math.Abs(value);
+        if(absolute>=100_000_000m)return (value/100_000_000m).ToString("0.00")+"亿";
+        if(absolute>=10_000m)return (value/10_000m).ToString("0.00")+"万";
+        return value.ToString("0")+"元";
+    }
+
     private void SearchChanged(object? sender,EventArgs e){if(_search.ForeColor==Color.Gray)return;_searchTimer.Stop();if(_search.Text.Trim().Length==0){_suggestions.Visible=false;return;}_suggestions.Items.Clear();_suggestions.Items.Add("正在搜索，请稍候...");_suggestions.Visible=true;_suggestions.BringToFront();_searchTimer.Start();}
     private void SearchKeyDown(object? sender,KeyEventArgs e){if(e.KeyCode==Keys.Down&&_suggestions.Visible){_suggestions.Focus();_suggestions.SelectedIndex=0;e.Handled=true;}else if(e.KeyCode==Keys.Enter&&_suggestions.Visible){if(_suggestions.SelectedIndex<0)_suggestions.SelectedIndex=0;AddSearchSelection();e.Handled=true;}}
     private async Task RunSearchAsync(){var key=_search.Text.Trim();_searchCts?.Cancel();_searchCts=new CancellationTokenSource();try{var results=await _searchService.SearchAsync(key,_searchCts.Token);if(key!=_search.Text.Trim())return;_suggestions.Items.Clear();foreach(var r in results)_suggestions.Items.Add(r);if(results.Count==0)_suggestions.Items.Add(key+"        手动添加");}catch(OperationCanceledException){}catch{_suggestions.Items.Clear();_suggestions.Items.Add(key+"        手动添加");}}
@@ -267,11 +404,23 @@ public sealed class SettingsForm : Form
     private void ChooseBackground(object? s,EventArgs e){using var d=new ColorDialog{Color=_background.BackColor,FullOpen=true};if(d.ShowDialog(this)==DialogResult.OK)_background.BackColor=d.Color;}
     private void ExportConfig(object? s,EventArgs e){ReadControls();using var d=new SaveFileDialog{Filter="盯盘配置 (*.json)|*.json",FileName="StockTickerLite-settings.json"};if(d.ShowDialog(this)==DialogResult.OK)File.WriteAllText(d.FileName,JsonSerializer.Serialize(Result,new JsonSerializerOptions{WriteIndented=true}));}
     private void ImportConfig(object? s,EventArgs e){using var d=new OpenFileDialog{Filter="盯盘配置 (*.json)|*.json"};if(d.ShowDialog(this)!=DialogResult.OK)return;try{var x=JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(d.FileName))!;Result=x;_stocks.Rows.Clear();LoadControls(x);}catch{MessageBox.Show("配置文件无法读取。");}}
-    protected override void OnFormClosed(FormClosedEventArgs e){_searchTimer.Stop();_searchCts?.Cancel();_searchService.Dispose();base.OnFormClosed(e);}
+    protected override void OnFormClosed(FormClosedEventArgs e){_searchTimer.Stop();_searchCts?.Cancel();_rankingCts?.Cancel();_rankingCts?.Dispose();_rankingChartCts?.Cancel();_rankingChartCts?.Dispose();_searchService.Dispose();_rankingService.Dispose();_rankingQuoteService.Dispose();base.OnFormClosed(e);}
     private static TabPage Page(string text)=>new(text){Size=new Size(323,263),Padding=new Padding(3)};
     private static GroupBox Box(string text,int x,int y,int w,int h)=>new(){Text=text,Location=new Point(x,y),Size=new Size(w,h)};
     private static Label LabelAt(string text,int x,int y)=>new(){Text=text,Location=new Point(x,y),AutoSize=true};
     private static ComboBox Combo(params string[] items){var c=new ComboBox{DropDownStyle=ComboBoxStyle.DropDownList};c.Items.AddRange(items);if(items.Length>0)c.SelectedIndex=0;return c;}
+    private static DataGridView RankingGrid(string metricHeader)
+    {
+        var grid=new DataGridView{Dock=DockStyle.Fill,AllowUserToAddRows=false,AllowUserToDeleteRows=false,AllowUserToResizeRows=false,AutoGenerateColumns=false,ReadOnly=true,RowHeadersVisible=false,MultiSelect=false,SelectionMode=DataGridViewSelectionMode.FullRowSelect,BackgroundColor=SystemColors.Window,BorderStyle=BorderStyle.Fixed3D};
+        grid.Columns.Add(new DataGridViewTextBoxColumn{HeaderText="排名",Width=52,MinimumWidth=46,AutoSizeMode=DataGridViewAutoSizeColumnMode.None,SortMode=DataGridViewColumnSortMode.NotSortable,DefaultCellStyle=new DataGridViewCellStyle{Alignment=DataGridViewContentAlignment.MiddleCenter}});
+        grid.Columns.Add(Column("股票代码"));
+        grid.Columns.Add(Column("股票名称"));
+        grid.Columns.Add(Column("板块"));
+        grid.Columns.Add(Column("当日涨跌",DataGridViewContentAlignment.MiddleRight));
+        grid.Columns.Add(Column(metricHeader,DataGridViewContentAlignment.MiddleRight));
+        return grid;
+        static DataGridViewTextBoxColumn Column(string header,DataGridViewContentAlignment alignment=DataGridViewContentAlignment.MiddleLeft)=>new(){HeaderText=header,AutoSizeMode=DataGridViewAutoSizeColumnMode.Fill,FillWeight=100,MinimumWidth=55,SortMode=DataGridViewColumnSortMode.NotSortable,DefaultCellStyle=new DataGridViewCellStyle{Alignment=alignment}};
+    }
     private static void Place(Control c,int x,int y,int w,int h){c.Location=new Point(x,y);c.Size=new Size(w,h);}
     private static void Select(ComboBox c,int i)=>c.SelectedIndex=Math.Clamp(i,0,c.Items.Count-1);
     private static decimal Number(string s,decimal fallback)=>decimal.TryParse(new string(s.Where(x=>char.IsDigit(x)||x=='.').ToArray()),out var n)?n:fallback;

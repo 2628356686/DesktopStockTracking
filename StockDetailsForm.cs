@@ -9,17 +9,47 @@ public sealed class StockDetailsForm : Form
     private readonly Label _title=new(){AutoSize=true,Font=new Font("Microsoft YaHei UI",14,FontStyle.Bold)};
     private readonly Label _details=new(){AutoSize=true,Font=new Font("Consolas",10)};
     private readonly PriceCanvas _canvas=new(){Dock=DockStyle.Fill};
+    private readonly SinaChartService _charts=new();
+    private readonly System.Windows.Forms.Timer _refreshTimer=new();
+    private readonly string _code;
+    private readonly string _chartType;
+    private CancellationTokenSource? _cts;
+    private bool _refreshing;
+    private bool _hasData;
 
-    public StockDetailsForm(StockItem stock,StockQuote quote,IReadOnlyList<(DateTime Time,decimal Price)> history)
+    public StockDetailsForm(StockItem stock,StockQuote quote,IReadOnlyList<(DateTime Time,decimal Price)> history,string chartType,int refreshSeconds)
     {
+        _code=stock.NormalizedCode;_chartType=chartType;
         Text="当日分时图";StartPosition=FormStartPosition.CenterParent;Size=new Size(760,540);MinimumSize=new Size(500,360);Font=new Font("Microsoft YaHei UI",9);
         var top=new Panel{Dock=DockStyle.Top,Height=125,Padding=new Padding(18,14,18,6)};var name=string.IsNullOrWhiteSpace(stock.DisplayName)?quote.Name:stock.DisplayName;
         _title.Text=$"{name}  {quote.Code}";_title.ForeColor=quote.Change>0?Color.Red:quote.Change<0?Color.Green:Color.Black;
         _details.Text=$"现价 {quote.Current,10:0.00}    涨跌 {quote.Change,9:+0.00;-0.00;0.00}    涨幅 {quote.ChangePercent,8:+0.00;-0.00;0.00}%\r\n"+$"今开 {quote.Open,10:0.00}    最高 {quote.High,9:0.00}    最低 {quote.Low,10:0.00}\r\n"+$"昨收 {quote.PreviousClose,10:0.00}    成交量 {quote.Volume/10000m,7:0.00}万    成交额 {quote.Amount/100000000m,7:0.00}亿";
         _title.Location=new Point(18,12);_details.Location=new Point(18,48);top.Controls.Add(_title);top.Controls.Add(_details);_canvas.SetLoading(quote.PreviousClose);Controls.Add(_canvas);Controls.Add(top);
+        _refreshTimer.Interval=chartType=="分时图"?Math.Clamp(refreshSeconds,1,10)*1000:60000;
+        _refreshTimer.Tick+=async (_,_)=>await RefreshChartAsync();
+        Shown+=async (_,_)=>{await RefreshChartAsync();if(!IsDisposed)_refreshTimer.Start();};
     }
     public void SetChartData(IReadOnlyList<IntradayPoint> data,string chartType){Text=chartType;_canvas.SetData(data,chartType);}
     public void SetChartError(string message)=>_canvas.SetError(message);
+
+    private async Task RefreshChartAsync()
+    {
+        if(_refreshing||IsDisposed)return;_refreshing=true;
+        _cts?.Cancel();_cts?.Dispose();_cts=new CancellationTokenSource();
+        try
+        {
+            var data=await _charts.GetChartAsync(_code,_chartType,_cts.Token);
+            if(IsDisposed)return;SetChartData(data,_chartType);_hasData=data.Count>0;
+        }
+        catch(OperationCanceledException){}
+        catch(Exception ex){if(!IsDisposed&&!_hasData)SetChartError("行情加载失败："+ex.Message);}
+        finally{_refreshing=false;}
+    }
+
+    protected override void OnFormClosed(FormClosedEventArgs e)
+    {
+        _refreshTimer.Stop();_cts?.Cancel();_cts?.Dispose();_refreshTimer.Dispose();_charts.Dispose();base.OnFormClosed(e);
+    }
 
     private sealed class PriceCanvas:Control
     {

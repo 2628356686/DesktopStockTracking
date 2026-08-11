@@ -9,6 +9,8 @@ namespace StockTickerLite.Services;
 public sealed partial class SinaQuoteService : IDisposable
 {
     private readonly HttpClient _client;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, decimal> _circulatingShares = new(StringComparer.OrdinalIgnoreCase);
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _industries = new(StringComparer.OrdinalIgnoreCase);
 
     public SinaQuoteService()
     {
@@ -28,7 +30,8 @@ public sealed partial class SinaQuoteService : IDisposable
 
     public async Task<IReadOnlyDictionary<string, StockQuote>> GetQuotesAsync(
         IEnumerable<string> codes,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool includeExtendedInfo = false)
     {
         var normalizedCodes = codes
             .Select(StockCode.Normalize)
@@ -39,7 +42,12 @@ public sealed partial class SinaQuoteService : IDisposable
         if (normalizedCodes.Length == 0)
             return new Dictionary<string, StockQuote>();
 
-        var path = "list=" + string.Join(',', normalizedCodes);
+        var missingExtendedInfoCodes = includeExtendedInfo
+            ? normalizedCodes.Where(code => !IsMarketIndex(code) &&
+                (!_circulatingShares.ContainsKey(code) || !_industries.ContainsKey(code))).ToArray()
+            : [];
+        var requestCodes = normalizedCodes.Concat(missingExtendedInfoCodes.Select(code => code + "_i"));
+        var path = "list=" + string.Join(',', requestCodes);
         var bytes = await _client.GetByteArrayAsync(path, cancellationToken);
         var response = Encoding.GetEncoding("GB18030").GetString(bytes);
 
@@ -53,8 +61,39 @@ public sealed partial class SinaQuoteService : IDisposable
                 result[code] = quote;
         }
 
+        if (includeExtendedInfo)
+        {
+            foreach (Match match in ExtendedInfoLineRegex().Matches(response))
+            {
+                var code = match.Groups["code"].Value.ToLowerInvariant();
+                if (!result.TryGetValue(code, out var quote))
+                    continue;
+
+                var fields = match.Groups["data"].Value.Split(',');
+                var circulatingSharesInTenThousands = Decimal(fields, 8);
+                if (circulatingSharesInTenThousands > 0)
+                    _circulatingShares[code] = circulatingSharesInTenThousands * 10000;
+                _industries[code] = fields.Length > 34 ? fields[34].Trim() : "";
+            }
+        }
+
+        foreach (var code in result.Keys.ToArray())
+        {
+            var quote = result[code];
+            if (_circulatingShares.TryGetValue(code, out var circulatingShares))
+                quote = quote with { CirculatingShares = circulatingShares };
+            if (_industries.TryGetValue(code, out var industry))
+                quote = quote with { Industry = industry };
+            result[code] = quote;
+        }
+
         return result;
     }
+
+    private static bool IsMarketIndex(string code) =>
+        code.StartsWith("sh000", StringComparison.OrdinalIgnoreCase) ||
+        code.StartsWith("sz399", StringComparison.OrdinalIgnoreCase) ||
+        code.StartsWith("bj899", StringComparison.OrdinalIgnoreCase);
 
     private static StockQuote? Parse(string code, string[] fields)
     {
@@ -126,6 +165,11 @@ public sealed partial class SinaQuoteService : IDisposable
         @"var\s+hq_str_(?<code>[a-z]{2}\d{6})=""(?<data>[^""]*)"";",
         RegexOptions.Compiled | RegexOptions.IgnoreCase)]
     private static partial Regex QuoteLineRegex();
+
+    [GeneratedRegex(
+        @"var\s+hq_str_(?<code>[a-z]{2}\d{6})_i=""(?<data>[^""]*)"";",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase)]
+    private static partial Regex ExtendedInfoLineRegex();
 }
 
 
