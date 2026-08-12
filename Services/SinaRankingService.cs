@@ -5,7 +5,7 @@ using StockTickerLite.Models;
 namespace StockTickerLite.Services;
 
 public sealed record StockRankingItem(string Code, string Name, string Industry, decimal ChangePercent, decimal Metric);
-public sealed record LimitUpLadderItem(string Code,string Name,string Industry,decimal ChangePercent,int ConsecutiveBoards,int BreakCount,DateTime? SealTime,bool IsPreviousLimitUpFailure=false);
+public sealed record LimitUpLadderItem(string Code,string Name,string Industry,decimal ChangePercent,int ConsecutiveBoards,int BreakCount,DateTime? SealTime,bool IsPreviousLimitUpFailure=false,int PreviousConsecutiveBoards=0);
 
 public sealed class SinaRankingService : IDisposable
 {
@@ -62,14 +62,61 @@ public sealed class SinaRankingService : IDisposable
         var date=DateTime.Now.ToString("yyyyMMdd",CultureInfo.InvariantCulture);
         var today=await GetEastmoneyLimitUpPoolAsync("getTopicZTPool","fbt:asc",date,false,cancellationToken);
         var yesterday=await GetEastmoneyLimitUpPoolAsync("getYesterdayZTPool","zs:desc",date,true,cancellationToken);
+        try{today=today.Concat(await GetCurrentStLimitUpsAsync(cancellationToken)).GroupBy(x=>x.Code,StringComparer.OrdinalIgnoreCase).Select(x=>x.First()).ToArray();}catch{ /* 普通涨停池仍可使用 */ }
+        try{yesterday=yesterday.Concat(await GetPreviousStLimitUpsAsync(cancellationToken)).GroupBy(x=>x.Code,StringComparer.OrdinalIgnoreCase).Select(x=>x.First()).ToArray();}catch{ /* 普通昨日池仍可使用 */ }
         if(yesterday.Count>0)_lastYesterdayLimitUpPool=yesterday;
         else if(_lastYesterdayLimitUpPool.Count>0)yesterday=_lastYesterdayLimitUpPool;
+        var yesterdayByCode=yesterday.ToDictionary(x=>x.Code,StringComparer.OrdinalIgnoreCase);
+        today=today.Select(x=>yesterdayByCode.TryGetValue(x.Code,out var previous)?x with{PreviousConsecutiveBoards=previous.ConsecutiveBoards}:x).ToArray();
         var todayCodes=today.Select(x=>x.Code).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var failures=yesterday.Where(x=>!todayCodes.Contains(x.Code)).Select(x=>x with{IsPreviousLimitUpFailure=true});
+        var failures=yesterday.Where(x=>!todayCodes.Contains(x.Code)).Select(x=>x with{IsPreviousLimitUpFailure=true,PreviousConsecutiveBoards=x.ConsecutiveBoards});
         var combined=today.Concat(failures).ToArray();
         try{combined=await EnrichPoolClassificationsAsync(combined,todayCodes,cancellationToken);}catch{ /* 东财行业仍可作为降级分类 */ }
         return combined.OrderByDescending(x=>x.ConsecutiveBoards).ThenBy(x=>x.IsPreviousLimitUpFailure).ThenBy(x=>x.SealTime??DateTime.MaxValue).ToArray();
     }
+
+    private async Task<IReadOnlyList<LimitUpLadderItem>> GetCurrentStLimitUpsAsync(CancellationToken cancellationToken)
+    {
+        const string url="https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=500&po=1&np=1&fltt=2&invt=2&fid=f3&fs=m%3A0%2Bf%3A4%2Cm%3A1%2Bf%3A4&fields=f12%2Cf14%2Cf2%2Cf3%2Cf18";
+        var entries=await GetEastmoneyListAsync(url,cancellationToken);
+        var candidates=entries.Select(item=>(Item:item,Code:EastmoneyCode(Text(item,"f12")),Name:Text(item,"f14")))
+            .Where(x=>x.Code.Length>0&&IsLimitPrice(x.Code,x.Name,Number(x.Item,"f2"),Number(x.Item,"f18"))).ToArray();
+        var quotes=await _quoteService.GetQuotesAsync(candidates.Select(x=>x.Code),cancellationToken,includeExtendedInfo:true);
+        var results=new List<LimitUpLadderItem>();
+        foreach(var candidate in candidates)
+        {
+            if(!quotes.TryGetValue(candidate.Code,out var quote))continue;
+            var dailyTask=_chartService.GetChartAsync(quote.Code,"日K线",cancellationToken);var minuteTask=_chartService.GetChartAsync(quote.Code,"分时图",cancellationToken);await Task.WhenAll(dailyTask,minuteTask);
+            var (breaks,sealTime)=AnalyzeLimitUpIntraday(quote,await minuteTask);
+            results.Add(new LimitUpLadderItem(quote.Code,quote.Name,quote.Industry,quote.ChangePercent,CountConsecutiveBoards(quote,await dailyTask),breaks,sealTime));
+        }
+        return results;
+    }
+
+    private async Task<IReadOnlyList<LimitUpLadderItem>> GetPreviousStLimitUpsAsync(CancellationToken cancellationToken)
+    {
+        const string url="https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=200&po=1&np=1&fltt=2&invt=2&fid=f3&fs=b%3ABK1050&fields=f12%2Cf14%2Cf2%2Cf3%2Cf18";
+        var entries=await GetEastmoneyListAsync(url,cancellationToken);
+        var candidates=entries.Select(item=>(Item:item,Code:EastmoneyCode(Text(item,"f12")),Name:Text(item,"f14"))).Where(x=>x.Code.Length>0&&x.Name.Contains("ST",StringComparison.OrdinalIgnoreCase)).ToArray();
+        var quotes=await _quoteService.GetQuotesAsync(candidates.Select(x=>x.Code),cancellationToken,includeExtendedInfo:true);
+        var results=new List<LimitUpLadderItem>();
+        foreach(var candidate in candidates)
+        {
+            if(!quotes.TryGetValue(candidate.Code,out var quote))continue;var daily=await _chartService.GetChartAsync(quote.Code,"日K线",cancellationToken);
+            results.Add(new LimitUpLadderItem(quote.Code,quote.Name,quote.Industry,quote.ChangePercent,CountConsecutiveBoardsBeforeToday(quote,daily),0,null));
+        }
+        return results;
+    }
+
+    private async Task<JsonElement[]> GetEastmoneyListAsync(string url,CancellationToken cancellationToken)
+    {
+        using var request=new HttpRequestMessage(HttpMethod.Get,url);request.Headers.Referrer=new Uri("https://quote.eastmoney.com/center/");using var response=await _client.SendAsync(request,cancellationToken);response.EnsureSuccessStatusCode();
+        using var document=JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        return document.RootElement.TryGetProperty("data",out var data)&&data.ValueKind!=JsonValueKind.Null&&data.TryGetProperty("diff",out var diff)&&diff.ValueKind==JsonValueKind.Array?diff.EnumerateArray().Select(x=>x.Clone()).ToArray():[];
+    }
+
+    private static string EastmoneyCode(string rawCode)=>rawCode.Length!=6?string.Empty:rawCode.StartsWith('6')?"sh"+rawCode:rawCode.StartsWith('8')||rawCode.StartsWith('9')?"bj"+rawCode:"sz"+rawCode;
+    private static bool IsLimitPrice(string code,string name,decimal current,decimal previousClose){var rate=LimitRate(code,name);return rate>0&&previousClose>0&&current==decimal.Round(previousClose*(1+rate),2,MidpointRounding.AwayFromZero);}
 
     private async Task<LimitUpLadderItem[]> EnrichPoolClassificationsAsync(LimitUpLadderItem[] items,IReadOnlySet<string> todayCodes,CancellationToken cancellationToken)
     {
@@ -182,6 +229,19 @@ public sealed class SinaRankingService : IDisposable
             var limit=decimal.Round(points[i-1].Price*(1+rate),2,MidpointRounding.AwayFromZero);
             if(points[i].Price<limit)break;
             count++;
+        }
+        return Math.Max(1,count);
+    }
+
+    private static int CountConsecutiveBoardsBeforeToday(StockQuote quote,IReadOnlyList<IntradayPoint> source)
+    {
+        var today=(quote.QuoteTime??DateTime.Now).Date;
+        var points=source.GroupBy(x=>x.Time.Date).Select(x=>x.Last()).Where(x=>x.Time.Date<today).OrderBy(x=>x.Time).ToList();
+        var count=0;var rate=LimitRate(quote.Code,quote.Name);
+        for(var i=points.Count-1;i>0;i--)
+        {
+            var limit=decimal.Round(points[i-1].Price*(1+rate),2,MidpointRounding.AwayFromZero);
+            if(points[i].Price<limit)break;count++;
         }
         return Math.Max(1,count);
     }
