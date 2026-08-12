@@ -17,6 +17,7 @@ public sealed class SettingsForm : Form
     private readonly System.Windows.Forms.Timer _searchTimer = new() { Interval = 180 };
     private CancellationTokenSource? _searchCts;
     private CancellationTokenSource? _rankingCts;
+    private CancellationTokenSource? _limitUpCts;
     private CancellationTokenSource? _rankingChartCts;
     private readonly ComboBox _codeMode = Combo("完整代码", "最后3位代码", "最后2位代码", "不显示");
     private readonly CheckBox _showBoard = new() { Text = "显示证券板块", AutoSize = true };
@@ -52,8 +53,17 @@ public sealed class SettingsForm : Form
     private readonly DataGridView _hotStockRanking = RankingGrid("热度");
     private readonly DataGridView _capitalInflowRanking = RankingGrid("净流入");
     private readonly DataGridView _capitalOutflowRanking = RankingGrid("净流出");
+    private readonly FlowLayoutPanel _limitUpLadder = new(){Dock=DockStyle.Fill,AutoScroll=true,FlowDirection=FlowDirection.TopDown,WrapContents=false,BackColor=Color.White,Padding=new Padding(0)};
+    private readonly Label _limitUpTitle = new(){Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleCenter,Font=new Font("宋体",18,FontStyle.Bold)};
+    private readonly Label _limitUpSummary = new(){Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleCenter,ForeColor=Color.FromArgb(110,55,145),Font=new Font("宋体",10,FontStyle.Bold)};
+    private IReadOnlyList<LimitUpLadderItem> _limitUpItems=[];
+    private bool _renderingLimitUps;
+    private int _lastLimitUpCardsPerRow=-1;
+    private readonly System.Windows.Forms.Timer _limitUpResizeTimer=new(){Interval=220};
     private readonly Button _refreshRankings = new() { Text = "刷新排行", AutoSize = true, UseVisualStyleBackColor = true };
     private readonly Label _rankingStatus = new() { Text = "等待加载", AutoSize = true, ForeColor = Color.DimGray };
+    private readonly Button _refreshLimitUps = new() { Text = "刷新天梯", AutoSize = true, UseVisualStyleBackColor = true };
+    private readonly Label _limitUpStatus = new() { Text = "等待加载", AutoSize = true, ForeColor = Color.DimGray };
     private readonly ToolTip _tips = new();
 
     [Browsable(false)]
@@ -63,11 +73,13 @@ public sealed class SettingsForm : Form
     public SettingsForm(AppSettings source)
     {
         Result = Clone(source);
+        _limitUpResizeTimer.Tick+=(_,_)=>{_limitUpResizeTimer.Stop();RenderLimitUpLadder();};
         Text = "设置"; StartPosition = FormStartPosition.CenterScreen; FormBorderStyle = FormBorderStyle.Sizable;
         MaximizeBox = true; MinimizeBox = false; ClientSize = new Size(600, 500); MinimumSize = new Size(355, 349);
         Font = new Font("宋体", 9);
-        var tabs = new TabControl();
-        tabs.TabPages.Add(BuildStocksPage()); tabs.TabPages.Add(BuildRankingPage()); tabs.TabPages.Add(BuildDisplayPage()); tabs.TabPages.Add(BuildAdvancedPage()); tabs.TabPages.Add(BuildChartPage()); tabs.TabPages.Add(BuildMonitorPage()); tabs.TabPages.Add(BuildOtherPage());
+        var tabs = new TabControl();var limitUpPage=BuildLimitUpLadderPage();var limitUpLoaded=false;
+        tabs.TabPages.Add(BuildStocksPage()); tabs.TabPages.Add(BuildRankingPage()); tabs.TabPages.Add(limitUpPage); tabs.TabPages.Add(BuildDisplayPage()); tabs.TabPages.Add(BuildAdvancedPage()); tabs.TabPages.Add(BuildChartPage()); tabs.TabPages.Add(BuildMonitorPage()); tabs.TabPages.Add(BuildOtherPage());
+        tabs.Selected+=async(_,_)=>{if(tabs.SelectedTab!=limitUpPage||limitUpLoaded)return;limitUpLoaded=true;await LoadLimitUpLadderAsync();};
         var ok = new Button { Text = "确定", Size = new Size(80, 29), FlatStyle = FlatStyle.System, UseVisualStyleBackColor = true };
         var cancel = new Button { Text = "取消", Size = new Size(80, 29), FlatStyle = FlatStyle.System, UseVisualStyleBackColor = true, DialogResult = DialogResult.Cancel };
         ok.Click += (_, _) => { if (ReadControls()) { DialogResult = DialogResult.OK; Close(); } };
@@ -146,6 +158,21 @@ public sealed class SettingsForm : Form
         static TabPage RankingTab(string title,Control grid){var tab=new TabPage(title){Padding=new Padding(4)};tab.Controls.Add(grid);return tab;}
     }
 
+    private TabPage BuildLimitUpLadderPage()
+    {
+        var page=Page("涨停天梯");
+        var layout=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(4,4,4,4),ColumnCount=1,RowCount=5};
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute,42));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,26));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,34));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,24));
+        var toolbar=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=2,Margin=Padding.Empty};
+        toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        _limitUpStatus.Anchor=AnchorStyles.Left;_limitUpStatus.Margin=new Padding(4,0,4,0);toolbar.Controls.Add(_limitUpStatus,0,0);
+        _refreshLimitUps.Anchor=AnchorStyles.Right;_refreshLimitUps.Margin=new Padding(4,2,2,2);_refreshLimitUps.Click+=async(_,_)=>await LoadLimitUpLadderAsync();toolbar.Controls.Add(_refreshLimitUps,1,0);
+        layout.Controls.Add(_limitUpTitle,0,0);layout.Controls.Add(_limitUpSummary,0,1);layout.Controls.Add(toolbar,0,2);layout.Controls.Add(_limitUpLadder,0,3);
+        layout.Controls.Add(new Label{Text="封板时间、炸板次数按新浪一分钟行情还原",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleCenter,ForeColor=Color.DimGray,AutoEllipsis=true},0,4);
+        _limitUpLadder.SizeChanged+=(_,_)=>{_limitUpResizeTimer.Stop();_limitUpResizeTimer.Start();};page.Controls.Add(layout);return page;
+    }
+
     private void ConfigureRankingContextMenu(params DataGridView[] grids)
     {
         var menu=new ContextMenuStrip();
@@ -187,6 +214,11 @@ public sealed class SettingsForm : Form
     {
         if(menu.SourceControl is not DataGridView grid||grid.CurrentRow?.Tag is not string code)return;
         var name=Convert.ToString(grid.CurrentRow.Cells[2].Value);if(string.IsNullOrWhiteSpace(name))name=code;
+        await OpenRankingChartAsync(code,name,chartType);
+    }
+
+    private async Task OpenRankingChartAsync(string code,string name,string chartType)
+    {
         _rankingChartCts?.Cancel();_rankingChartCts?.Dispose();_rankingChartCts=new CancellationTokenSource();
         var cancellationToken=_rankingChartCts.Token;_rankingStatus.Text=$"正在获取 {name} 的{chartType}行情...";
         try
@@ -350,6 +382,94 @@ public sealed class SettingsForm : Form
         }
     }
 
+    private async Task LoadLimitUpLadderAsync()
+    {
+        _limitUpCts?.Cancel();_limitUpCts?.Dispose();_limitUpCts=new CancellationTokenSource();var cancellationToken=_limitUpCts.Token;
+        _refreshLimitUps.Enabled=false;_limitUpStatus.Text="正在扫描当日涨停股票...";_tips.SetToolTip(_limitUpStatus,string.Empty);
+        try
+        {
+            var items=await _rankingService.GetLimitUpLadderAsync(cancellationToken);
+            if(IsDisposed)return;
+            FillLimitUpLadder(items);
+            _limitUpStatus.Text=$"{items.Count(x=>!x.IsPreviousLimitUpFailure)}只涨停，更新于 {DateTime.Now:HH:mm:ss}";
+        }
+        catch(OperationCanceledException){}
+        catch(Exception ex)
+        {
+            if(IsDisposed)return;_limitUpStatus.Text="涨停天梯加载失败";_tips.SetToolTip(_limitUpStatus,ex.Message);
+        }
+        finally{if(!IsDisposed)_refreshLimitUps.Enabled=true;}
+    }
+
+    private void FillLimitUpLadder(IReadOnlyList<LimitUpLadderItem> items)
+    {
+        _limitUpItems=items;
+        _lastLimitUpCardsPerRow=-1;
+        _limitUpTitle.Text=$"{DateTime.Now:M月d日 dddd}  连板天梯";
+        var current=items.Where(x=>!x.IsPreviousLimitUpFailure).ToArray();var failed=items.Count(x=>x.IsPreviousLimitUpFailure);
+        var highest=current.Length==0?0:current.Max(x=>x.ConsecutiveBoards);var breaks=current.Sum(x=>x.BreakCount);
+        _limitUpSummary.Text=$"今日涨停：{current.Length}只    昨日断板：{failed}只    最高：{highest}板    累计炸板：{breaks}次";
+        RenderLimitUpLadder();
+    }
+
+    private void RenderLimitUpLadder()
+    {
+        if(_renderingLimitUps||_limitUpLadder.ClientSize.Width<100)return;
+        _renderingLimitUps=true;_limitUpLadder.SuspendLayout();
+        try
+        {
+            var width=Math.Max(280,_limitUpLadder.ClientSize.Width-SystemInformation.VerticalScrollBarWidth-6);
+            var cardsPerRow=Math.Max(1,(width-62)/96);
+            if(cardsPerRow==_lastLimitUpCardsPerRow&&_limitUpLadder.Controls.Count>0)
+            {
+                foreach(Control section in _limitUpLadder.Controls)section.Width=width;
+                return;
+            }
+            _limitUpLadder.Controls.Clear();_lastLimitUpCardsPerRow=cardsPerRow;
+            foreach(var group in _limitUpItems.GroupBy(x=>x.ConsecutiveBoards).OrderByDescending(x=>x.Key))
+            {
+                var tier=group.Key<=1?$"首板\r\n({group.Count()})":$"{group.Key}板";
+                AddSection(tier,group);
+            }
+
+            void AddSection(string title,IEnumerable<LimitUpLadderItem> source)
+            {
+                var values=source.ToArray();var rows=(int)Math.Ceiling(values.Length/(double)_lastLimitUpCardsPerRow);var height=Math.Max(72,rows*68+6);
+                var section=new TableLayoutPanel{Width=width,Height=height,Margin=new Padding(0),BorderStyle=BorderStyle.FixedSingle,BackColor=Color.White,ColumnCount=2,RowCount=1};
+                section.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,58));section.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));section.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+                section.Controls.Add(new Label{Text=title,Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleCenter,Font=new Font("宋体",10,FontStyle.Bold),BackColor=Color.FromArgb(250,250,250)},0,0);
+                var cards=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=true,AutoScroll=false,Padding=new Padding(3),Margin=Padding.Empty};
+                foreach(var item in values)cards.Controls.Add(CreateLimitUpCard(item));
+                section.Controls.Add(cards,1,0);_limitUpLadder.Controls.Add(section);
+            }
+        }
+        finally{_limitUpLadder.ResumeLayout();_renderingLimitUps=false;}
+    }
+
+    private Control CreateLimitUpCard(LimitUpLadderItem item)
+    {
+        var host=new Panel{Width=92,Height=62,Margin=new Padding(1),BackColor=Color.White,Cursor=Cursors.Hand};
+        var card=new TableLayoutPanel{Dock=DockStyle.Fill,Margin=Padding.Empty,ColumnCount=1,RowCount=3,BackColor=Color.White,Cursor=Cursors.Hand};
+        card.RowStyles.Add(new RowStyle(SizeType.Absolute,18));card.RowStyles.Add(new RowStyle(SizeType.Absolute,24));card.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+        var time=item.SealTime?.ToString("HH:mm")??"--";if(item.BreakCount>0)time+=$"  炸{item.BreakCount}";
+        var nameColor=item.ConsecutiveBoards>1?Color.FromArgb(205,45,35):Color.FromArgb(35,90,175);
+        var timeColor=Color.DimGray;var industryColor=Color.FromArgb(55,55,55);
+        if(item.IsPreviousLimitUpFailure){nameColor=FadeColor(nameColor);timeColor=FadeColor(timeColor);industryColor=FadeColor(industryColor);}
+        card.Controls.Add(new Label{Text=time,Dock=DockStyle.Fill,TextAlign=ContentAlignment.BottomCenter,ForeColor=timeColor,Font=new Font("宋体",8)},0,0);
+        card.Controls.Add(new Label{Text=item.Name,Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleCenter,ForeColor=nameColor,Font=new Font("宋体",10,FontStyle.Bold),AutoEllipsis=true},0,1);
+        card.Controls.Add(new Label{Text=string.IsNullOrWhiteSpace(item.Industry)?"未分类":item.Industry,Dock=DockStyle.Fill,TextAlign=ContentAlignment.TopCenter,ForeColor=industryColor,Font=new Font("宋体",8),AutoEllipsis=true},0,2);
+        var menu=new ContextMenuStrip();var add=menu.Items.Add(IsDuplicate(item.Code)?"已在关注列表中":"加入关注的股票");add.Enabled=!IsDuplicate(item.Code);menu.Items.Add(new ToolStripSeparator());var minute=menu.Items.Add("查看分时图");var daily=menu.Items.Add("查看K线图");
+        add.Click+=(_,_)=>{if(IsDuplicate(item.Code))return;AddStockRow(new StockItem{Code=item.Code,DisplayName=item.Name});_limitUpStatus.Text=$"已加入关注：{item.Name}";};
+        minute.Click+=async(_,_)=>await OpenRankingChartAsync(item.Code,item.Name,"分时图");daily.Click+=async(_,_)=>await OpenRankingChartAsync(item.Code,item.Name,"日K线");
+        foreach(Control control in card.Controls)control.ContextMenuStrip=menu;card.ContextMenuStrip=menu;host.ContextMenuStrip=menu;host.Controls.Add(card);
+        if(item.IsPreviousLimitUpFailure)
+        {
+            var overlay=new CrossOverlay{Dock=DockStyle.Fill,Cursor=Cursors.Hand,ContextMenuStrip=menu};
+            _tips.SetToolTip(overlay,$"{item.Name}：昨日涨停，今日未涨停（当前 {item.ChangePercent:+0.00;-0.00;0.00}%）");host.Controls.Add(overlay);overlay.BringToFront();
+        }
+        host.Disposed+=(_,_)=>menu.Dispose();return host;
+    }
+
     private async Task<string?> LoadRankingAsync(string title,Task<IReadOnlyList<StockRankingItem>> request,DataGridView grid,int type,CancellationToken cancellationToken)
     {
         try
@@ -415,7 +535,7 @@ public sealed class SettingsForm : Form
     private void ChooseBackground(object? s,EventArgs e){using var d=new ColorDialog{Color=_background.BackColor,FullOpen=true};if(d.ShowDialog(this)==DialogResult.OK)_background.BackColor=d.Color;}
     private void ExportConfig(object? s,EventArgs e){ReadControls();using var d=new SaveFileDialog{Filter="盯盘配置 (*.json)|*.json",FileName="StockTickerLite-settings.json"};if(d.ShowDialog(this)==DialogResult.OK)File.WriteAllText(d.FileName,JsonSerializer.Serialize(Result,new JsonSerializerOptions{WriteIndented=true}));}
     private void ImportConfig(object? s,EventArgs e){using var d=new OpenFileDialog{Filter="盯盘配置 (*.json)|*.json"};if(d.ShowDialog(this)!=DialogResult.OK)return;try{var x=JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(d.FileName))!;Result=x;_stocks.Rows.Clear();LoadControls(x);}catch{MessageBox.Show("配置文件无法读取。");}}
-    protected override void OnFormClosed(FormClosedEventArgs e){_searchTimer.Stop();_searchCts?.Cancel();_rankingCts?.Cancel();_rankingCts?.Dispose();_rankingChartCts?.Cancel();_rankingChartCts?.Dispose();_searchService.Dispose();_rankingService.Dispose();_rankingQuoteService.Dispose();base.OnFormClosed(e);}
+    protected override void OnFormClosed(FormClosedEventArgs e){_searchTimer.Stop();_limitUpResizeTimer.Stop();_limitUpResizeTimer.Dispose();_searchCts?.Cancel();_rankingCts?.Cancel();_rankingCts?.Dispose();_limitUpCts?.Cancel();_limitUpCts?.Dispose();_rankingChartCts?.Cancel();_rankingChartCts?.Dispose();_searchService.Dispose();_rankingService.Dispose();_rankingQuoteService.Dispose();base.OnFormClosed(e);}
     private static TabPage Page(string text)=>new(text){Size=new Size(323,263),Padding=new Padding(3)};
     private static GroupBox Box(string text,int x,int y,int w,int h)=>new(){Text=text,Location=new Point(x,y),Size=new Size(w,h)};
     private static Label LabelAt(string text,int x,int y)=>new(){Text=text,Location=new Point(x,y),AutoSize=true};
@@ -437,5 +557,23 @@ public sealed class SettingsForm : Form
     private static decimal Number(string s,decimal fallback)=>decimal.TryParse(new string(s.Where(x=>char.IsDigit(x)||x=='.').ToArray()),out var n)?n:fallback;
     private static AppSettings Clone(AppSettings s)=>JsonSerializer.Deserialize<AppSettings>(JsonSerializer.Serialize(s))!;
     private static StockItem CloneStock(StockItem s)=>JsonSerializer.Deserialize<StockItem>(JsonSerializer.Serialize(s))!;
+    private static Color FadeColor(Color color)=>Color.FromArgb((color.R+255)/2,(color.G+255)/2,(color.B+255)/2);
+
+    private sealed class CrossOverlay:Control
+    {
+        public CrossOverlay()
+        {
+            BackColor=Color.FromArgb(225,115,115);TabStop=false;
+        }
+        protected override void OnSizeChanged(EventArgs e)
+        {
+            base.OnSizeChanged(e);if(Width<=0||Height<=0)return;
+            const int p=12,t=3;
+            using var path=new System.Drawing.Drawing2D.GraphicsPath();
+            path.AddPolygon([new Point(p,p-t),new Point(p-t,p),new Point(Width-p,Height-p+t),new Point(Width-p+t,Height-p)]);
+            path.AddPolygon([new Point(Width-p,p-t),new Point(Width-p+t,p),new Point(p,Height-p+t),new Point(p-t,Height-p)]);
+            var old=Region;Region=new Region(path);old?.Dispose();
+        }
+    }
 }
 

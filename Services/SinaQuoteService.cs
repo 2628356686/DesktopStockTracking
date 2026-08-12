@@ -11,6 +11,7 @@ public sealed partial class SinaQuoteService : IDisposable
     private readonly HttpClient _client;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, decimal> _circulatingShares = new(StringComparer.OrdinalIgnoreCase);
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _industries = new(StringComparer.OrdinalIgnoreCase);
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, IReadOnlyList<string>> _concepts = new(StringComparer.OrdinalIgnoreCase);
 
     public SinaQuoteService()
     {
@@ -44,7 +45,7 @@ public sealed partial class SinaQuoteService : IDisposable
 
         var missingExtendedInfoCodes = includeExtendedInfo
             ? normalizedCodes.Where(code => !IsMarketIndex(code) &&
-                (!_circulatingShares.ContainsKey(code) || !_industries.ContainsKey(code))).ToArray()
+                (!_circulatingShares.ContainsKey(code) || !_industries.ContainsKey(code) || !_concepts.ContainsKey(code))).ToArray()
             : [];
         var requestCodes = normalizedCodes.Concat(missingExtendedInfoCodes.Select(code => code + "_i"));
         var path = "list=" + string.Join(',', requestCodes);
@@ -74,6 +75,9 @@ public sealed partial class SinaQuoteService : IDisposable
                 if (circulatingSharesInTenThousands > 0)
                     _circulatingShares[code] = circulatingSharesInTenThousands * 10000;
                 _industries[code] = fields.Length > 34 ? fields[34].Trim() : "";
+                _concepts[code] = fields.Length > 40
+                    ? fields[40].Split('|',StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
+                    : [];
             }
         }
 
@@ -84,6 +88,8 @@ public sealed partial class SinaQuoteService : IDisposable
                 quote = quote with { CirculatingShares = circulatingShares };
             if (_industries.TryGetValue(code, out var industry))
                 quote = quote with { Industry = industry };
+            if (_concepts.TryGetValue(code,out var concepts))
+                quote=quote with{Concepts=concepts};
             result[code] = quote;
         }
 
