@@ -5,7 +5,7 @@ using StockTickerLite.Models;
 namespace StockTickerLite.Services;
 
 public sealed record StockRankingItem(string Code, string Name, string Industry, decimal ChangePercent, decimal Metric);
-public sealed record LimitUpLadderItem(string Code,string Name,string Industry,decimal ChangePercent,int ConsecutiveBoards,int BreakCount,DateTime? SealTime,bool IsPreviousLimitUpFailure=false,int PreviousConsecutiveBoards=0);
+public sealed record LimitUpLadderItem(string Code,string Name,string Industry,decimal ChangePercent,int ConsecutiveBoards,int BreakCount,DateTime? SealTime,bool IsPreviousLimitUpFailure=false,int PreviousConsecutiveBoards=0,string IndustryBoard="");
 
 public sealed class SinaRankingService : IDisposable
 {
@@ -88,7 +88,7 @@ public sealed class SinaRankingService : IDisposable
             if(!quotes.TryGetValue(candidate.Code,out var quote))continue;
             var dailyTask=_chartService.GetChartAsync(quote.Code,"日K线",cancellationToken);var minuteTask=_chartService.GetChartAsync(quote.Code,"分时图",cancellationToken);await Task.WhenAll(dailyTask,minuteTask);
             var (breaks,sealTime)=AnalyzeLimitUpIntraday(quote,await minuteTask);
-            results.Add(new LimitUpLadderItem(quote.Code,quote.Name,quote.Industry,quote.ChangePercent,CountConsecutiveBoards(quote,await dailyTask),breaks,sealTime));
+            results.Add(new LimitUpLadderItem(quote.Code,quote.Name,quote.Industry,quote.ChangePercent,CountConsecutiveBoards(quote,await dailyTask),breaks,sealTime,IndustryBoard:quote.Industry));
         }
         return results;
     }
@@ -103,7 +103,7 @@ public sealed class SinaRankingService : IDisposable
         foreach(var candidate in candidates)
         {
             if(!quotes.TryGetValue(candidate.Code,out var quote))continue;var daily=await _chartService.GetChartAsync(quote.Code,"日K线",cancellationToken);
-            results.Add(new LimitUpLadderItem(quote.Code,quote.Name,quote.Industry,quote.ChangePercent,CountConsecutiveBoardsBeforeToday(quote,daily),0,null));
+            results.Add(new LimitUpLadderItem(quote.Code,quote.Name,quote.Industry,quote.ChangePercent,CountConsecutiveBoardsBeforeToday(quote,daily),0,null,IndustryBoard:quote.Industry));
         }
         return results;
     }
@@ -146,7 +146,8 @@ public sealed class SinaRankingService : IDisposable
             var market=(int)Number(item,"m");var code=market==1?"sh"+rawCode:rawCode.StartsWith('8')||rawCode.StartsWith('9')?"bj"+rawCode:"sz"+rawCode;
             var boards=(int)Number(item,yesterday?"ylbc":"lbc");if(boards<1)boards=1;
             var time=(int)Number(item,yesterday?"yfbt":"lbt");
-            result.Add(new LimitUpLadderItem(code,Text(item,"n"),Text(item,"hybk"),Number(item,"zdp"),boards,yesterday?0:(int)Number(item,"zbc"),ParsePoolTime(time)));
+            var industry=Text(item,"hybk");
+            result.Add(new LimitUpLadderItem(code,Text(item,"n"),industry,Number(item,"zdp"),boards,yesterday?0:(int)Number(item,"zbc"),ParsePoolTime(time),IndustryBoard:industry));
         }
         return result;
     }

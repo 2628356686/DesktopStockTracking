@@ -56,6 +56,7 @@ public sealed class SettingsForm : Form
     private readonly FlowLayoutPanel _limitUpLadder = new(){Dock=DockStyle.Fill,AutoScroll=true,FlowDirection=FlowDirection.TopDown,WrapContents=false,BackColor=Color.White,Padding=new Padding(0)};
     private readonly Label _limitUpTitle = new(){Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleCenter,Font=new Font("宋体",18,FontStyle.Bold)};
     private readonly Label _limitUpSummary = new(){Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleCenter,ForeColor=Color.FromArgb(110,55,145),Font=new Font("宋体",9,FontStyle.Bold)};
+    private readonly Label _limitUpIndustrySummary = new(){Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleCenter,ForeColor=Color.FromArgb(65,95,145),Font=new Font("宋体",8),AutoEllipsis=true};
     private readonly Label _limitUpPromotionSummary = new(){Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleCenter,ForeColor=Color.FromArgb(110,55,145),Font=new Font("宋体",7.5f)};
     private IReadOnlyList<LimitUpLadderItem> _limitUpItems=[];
     private bool _renderingLimitUps;
@@ -164,12 +165,12 @@ public sealed class SettingsForm : Form
         var page=Page("涨停天梯");
         var layout=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(4,4,4,4),ColumnCount=1,RowCount=5};
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute,42));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,48));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,34));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,24));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute,42));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,66));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,34));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,24));
         var toolbar=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=2,Margin=Padding.Empty};
         toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _limitUpStatus.Anchor=AnchorStyles.Left;_limitUpStatus.Margin=new Padding(4,0,4,0);toolbar.Controls.Add(_limitUpStatus,0,0);
         _refreshLimitUps.Anchor=AnchorStyles.Right;_refreshLimitUps.Margin=new Padding(4,2,2,2);_refreshLimitUps.Click+=async(_,_)=>await LoadLimitUpLadderAsync();toolbar.Controls.Add(_refreshLimitUps,1,0);
-        var summaries=new TableLayoutPanel{Dock=DockStyle.Fill,Margin=Padding.Empty,ColumnCount=1,RowCount=2};summaries.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));summaries.RowStyles.Add(new RowStyle(SizeType.Percent,50));summaries.RowStyles.Add(new RowStyle(SizeType.Percent,50));summaries.Controls.Add(_limitUpSummary,0,0);summaries.Controls.Add(_limitUpPromotionSummary,0,1);
+        var summaries=new TableLayoutPanel{Dock=DockStyle.Fill,Margin=Padding.Empty,ColumnCount=1,RowCount=3};summaries.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));summaries.RowStyles.Add(new RowStyle(SizeType.Percent,34));summaries.RowStyles.Add(new RowStyle(SizeType.Percent,33));summaries.RowStyles.Add(new RowStyle(SizeType.Percent,33));summaries.Controls.Add(_limitUpSummary,0,0);summaries.Controls.Add(_limitUpIndustrySummary,0,1);summaries.Controls.Add(_limitUpPromotionSummary,0,2);
         layout.Controls.Add(_limitUpTitle,0,0);layout.Controls.Add(summaries,0,1);layout.Controls.Add(toolbar,0,2);layout.Controls.Add(_limitUpLadder,0,3);
         layout.Controls.Add(new Label{Text="涨停股池来自东方财富，ST涨停按实时行情补充",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleCenter,ForeColor=Color.DimGray,AutoEllipsis=true},0,4);
         _limitUpLadder.SizeChanged+=(_,_)=>{_limitUpResizeTimer.Stop();_limitUpResizeTimer.Start();};page.Controls.Add(layout);return page;
@@ -410,9 +411,12 @@ public sealed class SettingsForm : Form
         _limitUpTitle.Text=$"{DateTime.Now:M月d日 dddd}  连板天梯";
         var current=items.Where(x=>!x.IsPreviousLimitUpFailure).ToArray();var failed=items.Count(x=>x.IsPreviousLimitUpFailure);
         var highest=current.Length==0?0:current.Max(x=>x.ConsecutiveBoards);var breaks=current.Sum(x=>x.BreakCount);
+        var industries=current.Select(x=>x.Name.Contains("ST",StringComparison.OrdinalIgnoreCase)?"ST":x.IndustryBoard.Trim()).Where(x=>!string.IsNullOrWhiteSpace(x)).GroupBy(x=>x,StringComparer.OrdinalIgnoreCase).OrderByDescending(x=>x.Count()).ThenBy(x=>x.Key,StringComparer.CurrentCulture).Select(x=>$"{x.Key}*{x.Count()}");
         var promotion=items.Where(x=>x.PreviousConsecutiveBoards>0).GroupBy(x=>x.PreviousConsecutiveBoards).OrderBy(x=>x.Key)
             .Select(group=>{var total=group.Count();var success=group.Count(x=>!x.IsPreviousLimitUpFailure);var rate=total==0?0:success*100m/total;return $"{group.Key}进{group.Key+1}成功率：{success}/{total}（{rate:0.#}%）";});
         _limitUpSummary.Text=$"今日涨停：{current.Length}只    昨日断板：{failed}只    最高：{highest}板    累计炸板：{breaks}次";
+        _limitUpIndustrySummary.Text=string.Join("    ",industries);
+        _tips.SetToolTip(_limitUpIndustrySummary,_limitUpIndustrySummary.Text);
         _limitUpPromotionSummary.Text=string.Join("    ",promotion);
         RenderLimitUpLadder();
     }
