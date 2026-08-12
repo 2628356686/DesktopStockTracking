@@ -53,6 +53,7 @@ public sealed class SettingsForm : Form
     private readonly DataGridView _hotStockRanking = RankingGrid("热度");
     private readonly DataGridView _capitalInflowRanking = RankingGrid("净流入");
     private readonly DataGridView _capitalOutflowRanking = RankingGrid("净流出");
+    private readonly DataGridView _industryRanking = IndustryRankingGrid();
     private readonly FlowLayoutPanel _limitUpLadder = new(){Dock=DockStyle.Fill,AutoScroll=true,FlowDirection=FlowDirection.TopDown,WrapContents=false,BackColor=Color.White,Padding=new Padding(0)};
     private readonly Label _limitUpTitle = new(){Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleCenter,Font=new Font("宋体",18,FontStyle.Bold)};
     private readonly Label _limitUpSummary = new(){Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleCenter,ForeColor=Color.FromArgb(110,55,145),Font=new Font("宋体",9,FontStyle.Bold)};
@@ -153,7 +154,7 @@ public sealed class SettingsForm : Form
         _rankingStatus.Anchor=AnchorStyles.Left;_rankingStatus.Margin=new Padding(4,0,4,0);toolbar.Controls.Add(_rankingStatus,0,0);
         _refreshRankings.Anchor=AnchorStyles.Right;_refreshRankings.Margin=new Padding(4,2,2,2);_refreshRankings.Click+=async(_,_)=>await LoadRankingsAsync();toolbar.Controls.Add(_refreshRankings,1,0);
         var rankingTabs=new TabControl{Dock=DockStyle.Fill,Margin=new Padding(0,3,0,0)};
-        rankingTabs.TabPages.Add(RankingTab("热股排行",_hotStockRanking));rankingTabs.TabPages.Add(RankingTab("流入排行",_capitalInflowRanking));rankingTabs.TabPages.Add(RankingTab("流出排行",_capitalOutflowRanking));
+        rankingTabs.TabPages.Add(RankingTab("热股排行",_hotStockRanking));rankingTabs.TabPages.Add(RankingTab("流入排行",_capitalInflowRanking));rankingTabs.TabPages.Add(RankingTab("流出排行",_capitalOutflowRanking));rankingTabs.TabPages.Add(RankingTab("行业排行",_industryRanking));
         ConfigureRankingContextMenu(_hotStockRanking,_capitalInflowRanking,_capitalOutflowRanking);
         layout.Controls.Add(toolbar,0,0);layout.Controls.Add(rankingTabs,0,1);
         page.Controls.Add(layout);return page;
@@ -373,10 +374,11 @@ public sealed class SettingsForm : Form
             var results=await Task.WhenAll(
                 LoadRankingAsync("热股排行",_rankingService.GetHotStocksAsync(cancellationToken),_hotStockRanking,0,cancellationToken),
                 LoadRankingAsync("流入排行",_rankingService.GetCapitalInflowAsync(cancellationToken),_capitalInflowRanking,1,cancellationToken),
-                LoadRankingAsync("流出排行",_rankingService.GetCapitalOutflowAsync(cancellationToken),_capitalOutflowRanking,2,cancellationToken));
+                LoadRankingAsync("流出排行",_rankingService.GetCapitalOutflowAsync(cancellationToken),_capitalOutflowRanking,2,cancellationToken),
+                LoadIndustryRankingAsync(cancellationToken));
             if(cancellationToken.IsCancellationRequested||IsDisposed)return;
             var errors=results.Where(x=>!string.IsNullOrWhiteSpace(x)).ToArray();
-            _rankingStatus.Text=errors.Length==0?$"更新于 {DateTime.Now:HH:mm:ss}":errors.Length==3?"排行加载失败":$"部分加载失败（{errors.Length}项）";
+            _rankingStatus.Text=errors.Length==0?$"更新于 {DateTime.Now:HH:mm:ss}":errors.Length==4?"排行加载失败":$"部分加载失败（{errors.Length}项）";
             _tips.SetToolTip(_rankingStatus,string.Join(Environment.NewLine,errors));
         }
         finally
@@ -411,12 +413,13 @@ public sealed class SettingsForm : Form
         _limitUpTitle.Text=$"{DateTime.Now:M月d日 dddd}  连板天梯";
         var current=items.Where(x=>!x.IsPreviousLimitUpFailure).ToArray();var failed=items.Count(x=>x.IsPreviousLimitUpFailure);
         var highest=current.Length==0?0:current.Max(x=>x.ConsecutiveBoards);var breaks=current.Sum(x=>x.BreakCount);
-        var industries=current.Select(x=>x.Name.Contains("ST",StringComparison.OrdinalIgnoreCase)?"ST":x.IndustryBoard.Trim()).Where(x=>!string.IsNullOrWhiteSpace(x)).GroupBy(x=>x,StringComparer.OrdinalIgnoreCase).OrderByDescending(x=>x.Count()).ThenBy(x=>x.Key,StringComparer.CurrentCulture).Select(x=>$"{x.Key}*{x.Count()}");
+        var industryGroups=current.Select(x=>(Parent:string.IsNullOrWhiteSpace(x.PrimaryIndustry)?x.IndustryBoard.Trim():x.PrimaryIndustry.Trim(),Detail:x.IndustryBoard.Trim())).Where(x=>!string.IsNullOrWhiteSpace(x.Parent)).GroupBy(x=>x.Parent,StringComparer.OrdinalIgnoreCase).OrderByDescending(x=>x.Count()).ThenBy(x=>x.Key,StringComparer.CurrentCulture).ToArray();
+        var industries=industryGroups.Select(x=>$"{x.Key}*{x.Count()}");
         var promotion=items.Where(x=>x.PreviousConsecutiveBoards>0).GroupBy(x=>x.PreviousConsecutiveBoards).OrderBy(x=>x.Key)
             .Select(group=>{var total=group.Count();var success=group.Count(x=>!x.IsPreviousLimitUpFailure);var rate=total==0?0:success*100m/total;return $"{group.Key}进{group.Key+1}成功率：{success}/{total}（{rate:0.#}%）";});
         _limitUpSummary.Text=$"今日涨停：{current.Length}只    昨日断板：{failed}只    最高：{highest}板    累计炸板：{breaks}次";
         _limitUpIndustrySummary.Text=string.Join("    ",industries);
-        _tips.SetToolTip(_limitUpIndustrySummary,_limitUpIndustrySummary.Text);
+        _tips.SetToolTip(_limitUpIndustrySummary,string.Join(Environment.NewLine,industryGroups.Select(group=>$"{group.Key}*{group.Count()}："+string.Join("、",group.Where(x=>!string.IsNullOrWhiteSpace(x.Detail)).GroupBy(x=>x.Detail).OrderByDescending(x=>x.Count()).Select(x=>$"{x.Key}*{x.Count()}")))));
         _limitUpPromotionSummary.Text=string.Join("    ",promotion);
         RenderLimitUpLadder();
     }
@@ -493,6 +496,24 @@ public sealed class SettingsForm : Form
         catch(Exception ex){return title+"："+ex.Message;}
     }
 
+    private async Task<string?> LoadIndustryRankingAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var items=await _rankingService.GetIndustryRankingAsync(cancellationToken);if(cancellationToken.IsCancellationRequested||IsDisposed)return null;
+            _industryRanking.Rows.Clear();
+            for(var i=0;i<items.Count;i++)
+            {
+                var item=items[i];var row=_industryRanking.Rows.Add(i+1,item.Name,item.ChangePercent.ToString("+0.00;-0.00;0.00")+"%",item.LeadingStock,item.LeadingStockChangePercent.ToString("+0.00;-0.00;0.00")+"%");
+                _industryRanking.Rows[row].Cells[2].Style.ForeColor=ChangeColor(item.ChangePercent);_industryRanking.Rows[row].Cells[4].Style.ForeColor=ChangeColor(item.LeadingStockChangePercent);
+            }
+            return null;
+        }
+        catch(OperationCanceledException){return null;}
+        catch(Exception ex){return "行业排行："+ex.Message;}
+        static Color ChangeColor(decimal value)=>value>0?Color.Red:value<0?Color.FromArgb(0,145,70):Color.Black;
+    }
+
     private static void FillRankingGrid(DataGridView grid,IReadOnlyList<StockRankingItem> items,int type)
     {
         grid.Rows.Clear();
@@ -562,6 +583,13 @@ public sealed class SettingsForm : Form
         grid.Columns.Add(Column(metricHeader,DataGridViewContentAlignment.MiddleRight));
         return grid;
         static DataGridViewTextBoxColumn Column(string header,DataGridViewContentAlignment alignment=DataGridViewContentAlignment.MiddleLeft)=>new(){HeaderText=header,AutoSizeMode=DataGridViewAutoSizeColumnMode.Fill,FillWeight=100,MinimumWidth=55,SortMode=DataGridViewColumnSortMode.NotSortable,DefaultCellStyle=new DataGridViewCellStyle{Alignment=alignment}};
+    }
+    private static DataGridView IndustryRankingGrid()
+    {
+        var grid=new DataGridView{Dock=DockStyle.Fill,AllowUserToAddRows=false,AllowUserToDeleteRows=false,AllowUserToResizeRows=false,AutoGenerateColumns=false,ReadOnly=true,RowHeadersVisible=false,MultiSelect=false,SelectionMode=DataGridViewSelectionMode.FullRowSelect,BackgroundColor=SystemColors.Window,BorderStyle=BorderStyle.Fixed3D};
+        grid.Columns.Add(new DataGridViewTextBoxColumn{HeaderText="排名",Width=52,MinimumWidth=46,AutoSizeMode=DataGridViewAutoSizeColumnMode.None,SortMode=DataGridViewColumnSortMode.NotSortable,DefaultCellStyle=new DataGridViewCellStyle{Alignment=DataGridViewContentAlignment.MiddleCenter}});
+        grid.Columns.Add(Column("行业板块"));grid.Columns.Add(Column("板块涨跌",DataGridViewContentAlignment.MiddleRight));grid.Columns.Add(Column("领涨股"));grid.Columns.Add(Column("领涨股涨跌",DataGridViewContentAlignment.MiddleRight));return grid;
+        static DataGridViewTextBoxColumn Column(string header,DataGridViewContentAlignment alignment=DataGridViewContentAlignment.MiddleLeft)=>new(){HeaderText=header,AutoSizeMode=DataGridViewAutoSizeColumnMode.Fill,FillWeight=100,MinimumWidth=70,SortMode=DataGridViewColumnSortMode.NotSortable,DefaultCellStyle=new DataGridViewCellStyle{Alignment=alignment}};
     }
     private static void Place(Control c,int x,int y,int w,int h){c.Location=new Point(x,y);c.Size=new Size(w,h);}
     private static void Select(ComboBox c,int i)=>c.SelectedIndex=Math.Clamp(i,0,c.Items.Count-1);

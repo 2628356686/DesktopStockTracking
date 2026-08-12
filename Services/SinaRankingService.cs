@@ -5,7 +5,8 @@ using StockTickerLite.Models;
 namespace StockTickerLite.Services;
 
 public sealed record StockRankingItem(string Code, string Name, string Industry, decimal ChangePercent, decimal Metric);
-public sealed record LimitUpLadderItem(string Code,string Name,string Industry,decimal ChangePercent,int ConsecutiveBoards,int BreakCount,DateTime? SealTime,bool IsPreviousLimitUpFailure=false,int PreviousConsecutiveBoards=0,string IndustryBoard="");
+public sealed record IndustryRankingItem(string Code,string Name,decimal ChangePercent,string LeadingStock,decimal LeadingStockChangePercent);
+public sealed record LimitUpLadderItem(string Code,string Name,string Industry,decimal ChangePercent,int ConsecutiveBoards,int BreakCount,DateTime? SealTime,bool IsPreviousLimitUpFailure=false,int PreviousConsecutiveBoards=0,string IndustryBoard="",string PrimaryIndustry="");
 
 public sealed class SinaRankingService : IDisposable
 {
@@ -14,6 +15,7 @@ public sealed class SinaRankingService : IDisposable
     private readonly SinaQuoteService _quoteService = new();
     private readonly SinaChartService _chartService = new();
     private IReadOnlyList<LimitUpLadderItem> _lastYesterdayLimitUpPool=[];
+    private readonly Dictionary<string,string> _primaryIndustryByStock=new(StringComparer.OrdinalIgnoreCase);
 
     public SinaRankingService()
     {
@@ -57,6 +59,24 @@ public sealed class SinaRankingService : IDisposable
     public Task<IReadOnlyList<StockRankingItem>> GetCapitalOutflowAsync(CancellationToken cancellationToken) =>
         GetCapitalFlowAsync(ascending: true, cancellationToken);
 
+    public async Task<IReadOnlyList<IndustryRankingItem>> GetIndustryRankingAsync(CancellationToken cancellationToken)
+    {
+        const string url="https://money.finance.sina.com.cn/q/view/newFLJK.php?param=industry";
+        using var response=await _client.GetAsync(url,cancellationToken);response.EnsureSuccessStatusCode();
+        var bytes=await response.Content.ReadAsByteArrayAsync(cancellationToken);var script=System.Text.Encoding.GetEncoding("GB18030").GetString(bytes);
+        var start=script.IndexOf('{');var end=script.LastIndexOf('}');if(start<0||end<=start)return [];
+        using var document=JsonDocument.Parse(script[start..(end+1)]);var result=new List<IndustryRankingItem>();
+        foreach(var property in document.RootElement.EnumerateObject())
+        {
+            if(!property.Name.StartsWith("hangye_",StringComparison.OrdinalIgnoreCase))continue;
+            var fields=property.Value.GetString()?.Split(',');if(fields is null||fields.Length<13)continue;
+            result.Add(new IndustryRankingItem(fields[0],fields[1],ParseDecimal(fields[5]),fields[12],ParseDecimal(fields[9])));
+        }
+        return result.OrderByDescending(x=>x.ChangePercent).ToArray();
+    }
+
+    private static decimal ParseDecimal(string value)=>decimal.TryParse(value,NumberStyles.Float,CultureInfo.InvariantCulture,out var number)?number:0;
+
     public async Task<IReadOnlyList<LimitUpLadderItem>> GetLimitUpLadderAsync(CancellationToken cancellationToken)
     {
         var date=DateTime.Now.ToString("yyyyMMdd",CultureInfo.InvariantCulture);
@@ -72,7 +92,29 @@ public sealed class SinaRankingService : IDisposable
         var failures=yesterday.Where(x=>!todayCodes.Contains(x.Code)).Select(x=>x with{IsPreviousLimitUpFailure=true,PreviousConsecutiveBoards=x.ConsecutiveBoards});
         var combined=today.Concat(failures).ToArray();
         try{combined=await EnrichPoolClassificationsAsync(combined,todayCodes,cancellationToken);}catch{ /* 东财行业仍可作为降级分类 */ }
+        try{combined=await EnrichPrimaryIndustriesAsync(combined,cancellationToken);}catch{ /* 二级行业仍可用于降级统计 */ }
         return combined.OrderByDescending(x=>x.ConsecutiveBoards).ThenBy(x=>x.IsPreviousLimitUpFailure).ThenBy(x=>x.SealTime??DateTime.MaxValue).ToArray();
+    }
+
+    private async Task<LimitUpLadderItem[]> EnrichPrimaryIndustriesAsync(LimitUpLadderItem[] items,CancellationToken cancellationToken)
+    {
+        var missing=items.Where(x=>!x.Name.Contains("ST",StringComparison.OrdinalIgnoreCase)&&!_primaryIndustryByStock.ContainsKey(StockCode.Normalize(x.Code)[2..])).Select(x=>StockCode.Normalize(x.Code)[2..]).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if(missing.Count>0)
+        {
+            const string boardsUrl="https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=100&po=1&np=1&fltt=2&invt=2&fid=f3&fs=m%3A90%2Bs%3A2%2Bf%3A!50&fields=f12%2Cf14";
+            var boards=await GetEastmoneyListAsync(boardsUrl,cancellationToken);using var gate=new SemaphoreSlim(6);
+            await Task.WhenAll(boards.Select(async board=>
+            {
+                await gate.WaitAsync(cancellationToken);try
+                {
+                    var boardCode=Text(board,"f12");var boardName=Text(board,"f14");if(boardCode.Length==0||boardName.Length==0)return;
+                    var url=$"https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=1000&po=1&np=1&fltt=2&invt=2&fid=f3&fs=b%3A{Uri.EscapeDataString(boardCode)}&fields=f12";
+                    foreach(var stock in await GetEastmoneyListAsync(url,cancellationToken)){var code=Text(stock,"f12");if(code.Length==6)lock(_primaryIndustryByStock)_primaryIndustryByStock[code]=boardName;}
+                }
+                finally{gate.Release();}
+            }));
+        }
+        return items.Select(item=>item.Name.Contains("ST",StringComparison.OrdinalIgnoreCase)?item with{PrimaryIndustry="ST"}:_primaryIndustryByStock.TryGetValue(StockCode.Normalize(item.Code)[2..],out var parent)?item with{PrimaryIndustry=parent}:item with{PrimaryIndustry=item.IndustryBoard}).ToArray();
     }
 
     private async Task<IReadOnlyList<LimitUpLadderItem>> GetCurrentStLimitUpsAsync(CancellationToken cancellationToken)
