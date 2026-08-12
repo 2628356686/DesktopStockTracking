@@ -206,25 +206,36 @@ public sealed class SettingsForm : Form
     private TabPage BuildAdvancedPage()
     {
         var page=Page("高级");
-        var table=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(18,12,18,8),ColumnCount=3,RowCount=9};
+        var table=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(18,12,18,8),ColumnCount=3,RowCount=8};
         table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,115));
         table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,38));
         table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,62));
-        for(var i=0;i<8;i++)table.RowStyles.Add(new RowStyle(SizeType.Absolute,42));
-        table.RowStyles.Add(new RowStyle(SizeType.Absolute,52));
+        for(var i=0;i<5;i++)table.RowStyles.Add(new RowStyle(SizeType.Absolute,36));
+        table.RowStyles.Add(new RowStyle(SizeType.Absolute,132));
+        table.RowStyles.Add(new RowStyle(SizeType.Absolute,36));
+        table.RowStyles.Add(new RowStyle(SizeType.Absolute,44));
         AddRow(0,"文字大小：",_fontSize,"宋体；常规");
         AddRow(1,"行距：",_spacing,"");
         AddLabel("背景颜色：",2);var colorHost=new Panel{Dock=DockStyle.Fill,Margin=Padding.Empty};_background.Location=new Point(0,2);_background.Size=new Size(24,24);colorHost.Controls.Add(_background);table.Controls.Add(colorHost,1,2);table.Controls.Add(new Label{Text="白色为透明背景",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleLeft},2,2);
         AddRow(3,"透明度：",_opacity,"数值越小越透明");
         AddRow(4,"刷新间隔：",_refresh,"可设置 1–10 秒");
-        var shortcut=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=2,Margin=Padding.Empty};shortcut.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,48));shortcut.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));_boss.Dock=DockStyle.Fill;shortcut.Controls.Add(_boss,0,0);_bossShortcut.Dock=DockStyle.Fill;_bossShortcut.MaximumSize=new Size(260,0);_bossShortcut.Margin=new Padding(0,7,0,7);shortcut.Controls.Add(_bossShortcut,1,0);AddLabel("显示/隐藏快捷键：",5);table.Controls.Add(shortcut,1,5);table.SetColumnSpan(shortcut,2);
-        var bossActions=new FlowLayoutPanel{Dock=DockStyle.Fill,FlowDirection=FlowDirection.LeftToRight,WrapContents=false,Margin=new Padding(0,0,0,0),Padding=new Padding(0,5,0,0)};bossActions.Controls.Add(new Label{Text="按下快捷键后：",AutoSize=true,Margin=new Padding(0,5,10,0)});bossActions.Controls.Add(_bossHide);bossActions.Controls.Add(_bossExit);table.Controls.Add(bossActions,1,6);table.SetColumnSpan(bossActions,2);
-        var common=new FlowLayoutPanel{Dock=DockStyle.Fill,FlowDirection=FlowDirection.LeftToRight,WrapContents=false,Margin=Padding.Empty,Padding=new Padding(0,6,0,0)};_topMost.Margin=new Padding(0,4,18,0);_tray.Margin=new Padding(0,4,0,0);common.Controls.Add(_topMost);common.Controls.Add(_tray);table.Controls.Add(common,1,7);table.SetColumnSpan(common,2);
-        var reset=new Button{Text="一键重置(&R)",Size=new Size(120,26),Anchor=AnchorStyles.None,UseVisualStyleBackColor=true};reset.Click+=(_,_)=>LoadControls(new AppSettings());table.Controls.Add(reset,0,8);table.SetColumnSpan(reset,3);
+        var shortcutGroup=new GroupBox{Text="显示/隐藏快捷键",Dock=DockStyle.Fill,Margin=new Padding(6,4,6,6)};
+        var shortcutGrid=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(14,9,14,9),ColumnCount=3,RowCount=2};
+        shortcutGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,115));shortcutGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,72));shortcutGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+        shortcutGrid.RowStyles.Add(new RowStyle(SizeType.Percent,50));shortcutGrid.RowStyles.Add(new RowStyle(SizeType.Percent,50));
+        shortcutGrid.Controls.Add(ShortcutLabel("快捷键："),0,0);
+        _boss.Anchor=AnchorStyles.Left;_boss.Margin=new Padding(0);shortcutGrid.Controls.Add(_boss,1,0);
+        _bossShortcut.Dock=DockStyle.Fill;_bossShortcut.MaximumSize=Size.Empty;_bossShortcut.Margin=new Padding(0,6,0,6);shortcutGrid.Controls.Add(_bossShortcut,2,0);
+        shortcutGrid.Controls.Add(ShortcutLabel("按键动作："),0,1);
+        var bossActions=new FlowLayoutPanel{Dock=DockStyle.Fill,FlowDirection=FlowDirection.LeftToRight,WrapContents=false,Margin=Padding.Empty,Padding=new Padding(0,6,0,0)};_bossHide.Margin=new Padding(0,2,22,0);_bossExit.Margin=new Padding(0,2,0,0);bossActions.Controls.Add(_bossHide);bossActions.Controls.Add(_bossExit);shortcutGrid.Controls.Add(bossActions,1,1);shortcutGrid.SetColumnSpan(bossActions,2);
+        shortcutGroup.Controls.Add(shortcutGrid);table.Controls.Add(shortcutGroup,0,5);table.SetColumnSpan(shortcutGroup,3);
+        var common=new FlowLayoutPanel{Dock=DockStyle.Fill,FlowDirection=FlowDirection.LeftToRight,WrapContents=false,Margin=Padding.Empty,Padding=new Padding(121,5,0,0)};_topMost.Margin=new Padding(0,4,18,0);_tray.Margin=new Padding(0,4,0,0);common.Controls.Add(_topMost);common.Controls.Add(_tray);table.Controls.Add(common,0,6);table.SetColumnSpan(common,3);
+        var reset=new Button{Text="一键重置(&R)",Size=new Size(120,26),Anchor=AnchorStyles.None,UseVisualStyleBackColor=true};reset.Click+=(_,_)=>LoadControls(new AppSettings());table.Controls.Add(reset,0,7);table.SetColumnSpan(reset,3);
         _boss.CheckedChanged+=(_,_)=>{_bossHide.Enabled=_boss.Checked;_bossExit.Enabled=_boss.Checked;_bossShortcut.Enabled=_boss.Checked;}; _bossShortcut.Enter+=(_,_)=>_bossShortcut.SelectAll(); _bossShortcut.MouseDown+=(_,_)=>_bossShortcut.SelectAll(); _bossShortcut.KeyDown+=CaptureShortcut; _tips.SetToolTip(_bossShortcut,"点击后直接按组合键；Backspace 或 Delete 清空");
         _background.Click+=ChooseBackground;_tips.SetToolTip(_boss,"开启后，按下指定快捷键程序可以自动隐藏、退出");page.Controls.Add(table);return page;
         void AddLabel(string text,int row){var label=new Label{Text=text,Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleRight,AutoEllipsis=true,Margin=new Padding(0,0,10,0)};table.Controls.Add(label,0,row);}
         void AddRow(int row,string labelText,Control input,string note){AddLabel(labelText,row);input.Dock=DockStyle.Fill;input.Margin=new Padding(0,8,10,8);table.Controls.Add(input,1,row);if(note.Length>0)table.Controls.Add(new Label{Text=note,Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleLeft,AutoEllipsis=true,Margin=new Padding(0)},2,row);}
+        static Label ShortcutLabel(string text)=>new(){Text=text,Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleRight,AutoSize=false,AutoEllipsis=true,Margin=new Padding(0,0,12,0),UseCompatibleTextRendering=false};
     }
 
     private TabPage BuildChartPage()

@@ -31,20 +31,20 @@ public static class AbnormalMovementMonitor
         if(dragonTiger)
         {
             var dailyLimit=north?20m:growth?15m:7m;var amplitudeLimit=north||growth?30m:15m;var threeDayLimit=north?40m:growth?30m:20m;
-            var dailyValue=growth||north?quote.ChangePercent:Deviation(stock,benchmark,1);
+            var dailyValue=growth||north?quote.ChangePercent:DeviationWithin(stock,benchmark,1,dailyLimit,-dailyLimit);
             var amplitude=quote.Low>0?(quote.High-quote.Low)/quote.Low*100:0;
             lines.Add("龙虎榜异动：");
             lines.Add(dailyValue is{}d?$"  单日{(growth||north?"涨跌幅":"偏离值")} {Signed(d)}，距±{dailyLimit:0}%阈值 {DistanceToEither(d,dailyLimit)}":"  单日指标：日K数据不足");
             lines.Add($"  当日振幅 {amplitude:0.00}%，距{amplitudeLimit:0}%阈值 {DistanceUp(amplitude,amplitudeLimit)}");
-            var three=Deviation(stock,benchmark,3);lines.Add(three is{}t?$"  3日累计偏离值 {Signed(t)}，距±{threeDayLimit:0}%阈值 {DistanceToEither(t,threeDayLimit)}":"  3日累计偏离值：日K数据不足");
+            var three=DeviationWithin(stock,benchmark,3,threeDayLimit,-threeDayLimit);lines.Add(three is{}t?$"  3日内累计偏离值 {Signed(t)}，距±{threeDayLimit:0}%阈值 {DistanceToEither(t,threeDayLimit)}":"  3日内累计偏离值：日K数据不足");
         }
         if(severe)
         {
             if(dragonTiger)lines.Add("");
             var tenUp=north?150m:100m;var tenDown=north?-60m:-50m;var thirtyUp=north?300m:200m;var thirtyDown=north?-75m:-70m;
             lines.Add("严重异动：");
-            AddPeriod(lines,10,Deviation(stock,benchmark,10),tenUp,tenDown);
-            AddPeriod(lines,30,Deviation(stock,benchmark,30),thirtyUp,thirtyDown);
+            AddPeriod(lines,10,DeviationWithin(stock,benchmark,10,tenUp,tenDown),tenUp,tenDown);
+            AddPeriod(lines,30,DeviationWithin(stock,benchmark,30,thirtyUp,thirtyDown),thirtyUp,thirtyDown);
         }
         return string.Join(Environment.NewLine,lines);
     }
@@ -54,7 +54,7 @@ public static class AbnormalMovementMonitor
         if(IsIndex(code))return string.Empty;
         var normalized=StockCode.Normalize(code);var north=normalized.StartsWith("bj",StringComparison.OrdinalIgnoreCase);var growth=normalized.StartsWith("sh688",StringComparison.OrdinalIgnoreCase)||normalized.StartsWith("sz300",StringComparison.OrdinalIgnoreCase)||normalized.StartsWith("sz301",StringComparison.OrdinalIgnoreCase);
         var dailyLimit=north?30m:growth?20m:10m;var tenUp=north?150m:100m;var thirtyUp=north?300m:200m;
-        var badges=new List<string>();AddBadge(badges,10,Deviation(stock,benchmark,10),tenUp,dailyLimit);AddBadge(badges,30,Deviation(stock,benchmark,30),thirtyUp,dailyLimit);
+        var badges=new List<string>();AddBadge(badges,10,DeviationWithin(stock,benchmark,10,tenUp,north?-60m:-50m),tenUp,dailyLimit);AddBadge(badges,30,DeviationWithin(stock,benchmark,30,thirtyUp,north?-75m:-70m),thirtyUp,dailyLimit);
         return string.Join(" ",badges);
     }
 
@@ -64,8 +64,8 @@ public static class AbnormalMovementMonitor
         var normalized=StockCode.Normalize(code);var north=normalized.StartsWith("bj",StringComparison.OrdinalIgnoreCase);
         var tenUp=north?150m:100m;var tenDown=north?-60m:-50m;var thirtyUp=north?300m:200m;var thirtyDown=north?-75m:-70m;
         var distances=new List<decimal>();
-        AddThresholdDistance(distances,Deviation(stock,benchmark,10),tenUp,tenDown);
-        AddThresholdDistance(distances,Deviation(stock,benchmark,30),thirtyUp,thirtyDown);
+        AddThresholdDistance(distances,DeviationWithin(stock,benchmark,10,tenUp,tenDown),tenUp,tenDown);
+        AddThresholdDistance(distances,DeviationWithin(stock,benchmark,30,thirtyUp,thirtyDown),thirtyUp,thirtyDown);
         return distances.Count==0?null:distances.Min();
     }
 
@@ -74,7 +74,7 @@ public static class AbnormalMovementMonitor
         if(IsIndex(code))return string.Empty;
         var normalized=StockCode.Normalize(code);var north=normalized.StartsWith("bj",StringComparison.OrdinalIgnoreCase);var growth=normalized.StartsWith("sh688",StringComparison.OrdinalIgnoreCase)||normalized.StartsWith("sz300",StringComparison.OrdinalIgnoreCase)||normalized.StartsWith("sz301",StringComparison.OrdinalIgnoreCase);
         var dailyLimit=north?20m:growth?15m:7m;var amplitudeLimit=north||growth?30m:15m;var threeDayLimit=north?40m:growth?30m:20m;
-        var dailyValue=growth||north?(decimal?)quote.ChangePercent:Deviation(stock,benchmark,1);var amplitude=quote.Low>0?(quote.High-quote.Low)/quote.Low*100:0;var threeDay=Deviation(stock,benchmark,3);
+        var dailyValue=growth||north?(decimal?)quote.ChangePercent:DeviationWithin(stock,benchmark,1,dailyLimit,-dailyLimit);var amplitude=quote.Low>0?(quote.High-quote.Low)/quote.Low*100:0;var threeDay=DeviationWithin(stock,benchmark,3,threeDayLimit,-threeDayLimit);
         var badges=new List<string>();
         if(dailyValue is{}daily)AddDragonTigerBadge(badges,"龙虎榜当日偏离",Math.Abs(daily),dailyLimit);
         AddDragonTigerBadge(badges,"龙虎榜当日振幅",amplitude,amplitudeLimit);
@@ -107,7 +107,7 @@ public static class AbnormalMovementMonitor
     private static void AddDragonTigerBadge(List<string> badges,string label,decimal value,decimal threshold)
     {
         var remaining=threshold-value;
-        if(remaining<=0)badges.Add(label+"已触发");
+        if(remaining<=0)badges.Add($"{label}已达{value:0.##}%");
         else if(remaining<=threshold*0.20m)badges.Add($"{label}差{remaining:0.##}%");
     }
 
@@ -115,7 +115,7 @@ public static class AbnormalMovementMonitor
     {
         if(value is not{}v)return;
         var remaining=threshold-v;
-        if(remaining<=0)badges.Add($"异动{days}日偏离已触发");
+        if(remaining<=0)badges.Add($"异动{days}日偏离已达{v:0.##}%");
         else if(remaining<=nearRange)badges.Add($"异动{days}日偏离差{remaining:0.##}%");
     }
 
@@ -128,24 +128,40 @@ public static class AbnormalMovementMonitor
 
     private static void AddPeriod(List<string> lines,int days,decimal? value,decimal up,decimal down)
     {
-        if(value is not{}v){lines.Add($"  {days}日累计偏离值：日K数据不足");return;}
-        var direction=v>=0?$"距上涨阈值+{up:0}%还差 {Math.Max(0,up-v):0.00}个百分点":$"距下跌阈值{down:0}%还差 {Math.Max(0,v-down):0.00}个百分点";
-        lines.Add($"  {days}日累计偏离值 {Signed(v)}，{direction}");
+        if(value is not{}v){lines.Add($"  {days}日内累计偏离值：日K数据不足");return;}
+        var direction=v>=up
+            ?$"已达 {v:0.00}%"
+            :v<=down
+                ?$"已达 {v:0.00}%"
+                :v>=0
+                    ?$"距上涨阈值+{up:0}%还差 {up-v:0.00}%"
+                    :$"距下跌阈值{down:0}%还差 {v-down:0.00}%";
+        lines.Add($"  {days}日内累计偏离值 {Signed(v)}，{direction}");
     }
 
-    private static decimal? Deviation(IReadOnlyList<IntradayPoint> stock,IReadOnlyList<IntradayPoint> benchmark,int days)
+    private static decimal? DeviationWithin(IReadOnlyList<IntradayPoint> stock,IReadOnlyList<IntradayPoint> benchmark,int maxDays,decimal upLimit,decimal downLimit)
     {
         var stocks=stock.GroupBy(x=>x.Time.Date).ToDictionary(x=>x.Key,x=>x.Last().Price);
         var indices=benchmark.GroupBy(x=>x.Time.Date).ToDictionary(x=>x.Key,x=>x.Last().Price);
         var dates=stocks.Keys.Intersect(indices.Keys).OrderBy(x=>x).ToList();
-        if(dates.Count<days+1)return null;
-        var end=dates[^1];var start=dates[^(days+1)];var stockStart=stocks[start];var indexStart=indices[start];
-        if(stockStart<=0||indexStart<=0)return null;
-        var stockReturn=(stocks[end]/stockStart-1)*100;var indexReturn=(indices[end]/indexStart-1)*100;
-        return stockReturn-indexReturn;
+        if(dates.Count<2)return null;
+        var end=dates[^1];var availableDays=Math.Min(maxDays,dates.Count-1);
+        decimal? selected=null;var selectedRatio=decimal.MinValue;
+        for(var days=1;days<=availableDays;days++)
+        {
+            // 交易所口径：统计期包含最近 days 个交易日，基准为统计期首日前一交易日收盘。
+            var start=dates[^(days+1)];var stockStart=stocks[start];var indexStart=indices[start];
+            if(stockStart<=0||indexStart<=0)continue;
+            var stockReturn=(stocks[end]/stockStart-1)*100;var indexReturn=(indices[end]/indexStart-1)*100;
+            var value=stockReturn-indexReturn;
+            var ratio=value>=0?value/upLimit:value/downLimit;
+            if(ratio<=selectedRatio)continue;
+            selected=value;selectedRatio=ratio;
+        }
+        return selected;
     }
 
     private static string Signed(decimal value)=>$"{value:+0.00;-0.00;0.00}%";
-    private static string DistanceUp(decimal value,decimal limit)=>value>=limit?"已达到":$"还差 {limit-value:0.00}个百分点";
-    private static string DistanceToEither(decimal value,decimal limit)=>Math.Abs(value)>=limit?"已达到":$"还差 {limit-Math.Abs(value):0.00}个百分点";
+    private static string DistanceUp(decimal value,decimal limit)=>value>=limit?$"已达 {value:0.00}%":$"还差 {limit-value:0.00}%";
+    private static string DistanceToEither(decimal value,decimal limit)=>Math.Abs(value)>=limit?$"已达 {value:0.00}%":$"还差 {limit-Math.Abs(value):0.00}%";
 }
