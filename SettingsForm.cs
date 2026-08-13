@@ -474,12 +474,21 @@ public sealed class SettingsForm : Form
         add.Click+=(_,_)=>{if(IsDuplicate(item.Code))return;AddStockRow(new StockItem{Code=item.Code,DisplayName=item.Name});_limitUpStatus.Text=$"已加入关注：{item.Name}";};
         minute.Click+=async(_,_)=>await OpenRankingChartAsync(item.Code,item.Name,"分时图");daily.Click+=async(_,_)=>await OpenRankingChartAsync(item.Code,item.Name,"日K线");
         foreach(Control control in card.Controls)control.ContextMenuStrip=menu;card.ContextMenuStrip=menu;host.ContextMenuStrip=menu;host.Controls.Add(card);
+        var tipLines=new List<string>{item.Name};
+        if(!string.IsNullOrWhiteSpace(item.LimitUpReason))tipLines.Add("涨停原因："+item.LimitUpReason);
+        else if(!item.IsPreviousLimitUpFailure)tipLines.Add("涨停原因：暂无数据");
         if(item.IsPreviousLimitUpFailure)
         {
             var overlay=new CrossOverlay{Dock=DockStyle.Fill,Cursor=Cursors.Hand,ContextMenuStrip=menu};
-            var tip=$"{item.Name}：{item.ConsecutiveBoards}进{item.ConsecutiveBoards+1}失败，当前 {item.ChangePercent:+0.00;-0.00;0.00}%";
+            tipLines.Add($"{item.ConsecutiveBoards}进{item.ConsecutiveBoards+1}失败，当前 {item.ChangePercent:+0.00;-0.00;0.00}%");
+            var tip=string.Join(Environment.NewLine,tipLines);
             _tips.SetToolTip(host,tip);_tips.SetToolTip(card,tip);foreach(Control control in card.Controls)_tips.SetToolTip(control,tip);_tips.SetToolTip(overlay,tip);
             host.Controls.Add(overlay);overlay.BringToFront();
+        }
+        else
+        {
+            var tip=string.Join(Environment.NewLine,tipLines);
+            _tips.SetToolTip(host,tip);_tips.SetToolTip(card,tip);foreach(Control control in card.Controls)_tips.SetToolTip(control,tip);
         }
         host.Disposed+=(_,_)=>menu.Dispose();return host;
     }

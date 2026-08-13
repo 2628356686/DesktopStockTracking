@@ -6,7 +6,7 @@ namespace StockTickerLite.Services;
 
 public sealed record StockRankingItem(string Code, string Name, string Industry, decimal ChangePercent, decimal Metric);
 public sealed record IndustryRankingItem(string Code,string Name,decimal ChangePercent,string LeadingStock,decimal LeadingStockChangePercent);
-public sealed record LimitUpLadderItem(string Code,string Name,string Industry,decimal ChangePercent,int ConsecutiveBoards,int BreakCount,DateTime? SealTime,bool IsPreviousLimitUpFailure=false,int PreviousConsecutiveBoards=0,string IndustryBoard="",string PrimaryIndustry="");
+public sealed record LimitUpLadderItem(string Code,string Name,string Industry,decimal ChangePercent,int ConsecutiveBoards,int BreakCount,DateTime? SealTime,bool IsPreviousLimitUpFailure=false,int PreviousConsecutiveBoards=0,string IndustryBoard="",string PrimaryIndustry="",string LimitUpReason="");
 
 public sealed class SinaRankingService : IDisposable
 {
@@ -80,8 +80,14 @@ public sealed class SinaRankingService : IDisposable
     public async Task<IReadOnlyList<LimitUpLadderItem>> GetLimitUpLadderAsync(CancellationToken cancellationToken)
     {
         var date=DateTime.Now.ToString("yyyyMMdd",CultureInfo.InvariantCulture);
-        var today=await GetEastmoneyLimitUpPoolAsync("getTopicZTPool","fbt:asc",date,false,cancellationToken);
-        var yesterday=await GetEastmoneyLimitUpPoolAsync("getYesterdayZTPool","zs:desc",date,true,cancellationToken);
+        var todayTask=GetEastmoneyLimitUpPoolAsync("getTopicZTPool","fbt:asc",date,false,cancellationToken);
+        var yesterdayTask=GetEastmoneyLimitUpPoolAsync("getYesterdayZTPool","zs:desc",date,true,cancellationToken);
+        var reasonsTask=GetLimitUpReasonsAsync(date,cancellationToken);
+        await Task.WhenAll(todayTask,yesterdayTask,reasonsTask);
+        var today=await todayTask;
+        var yesterday=await yesterdayTask;
+        var reasons=await reasonsTask;
+        today=today.Select(item=>reasons.TryGetValue(StockCode.Normalize(item.Code)[2..],out var reason)?item with{LimitUpReason=reason}:item).ToArray();
         try{today=today.Concat(await GetCurrentStLimitUpsAsync(cancellationToken)).GroupBy(x=>x.Code,StringComparer.OrdinalIgnoreCase).Select(x=>x.First()).ToArray();}catch{ /* 普通涨停池仍可使用 */ }
         try{yesterday=yesterday.Concat(await GetPreviousStLimitUpsAsync(cancellationToken)).GroupBy(x=>x.Code,StringComparer.OrdinalIgnoreCase).Select(x=>x.First()).ToArray();}catch{ /* 普通昨日池仍可使用 */ }
         if(yesterday.Count>0)_lastYesterdayLimitUpPool=yesterday;
@@ -94,6 +100,26 @@ public sealed class SinaRankingService : IDisposable
         try{combined=await EnrichPoolClassificationsAsync(combined,todayCodes,cancellationToken);}catch{ /* 东财行业仍可作为降级分类 */ }
         try{combined=await EnrichPrimaryIndustriesAsync(combined,cancellationToken);}catch{ /* 二级行业仍可用于降级统计 */ }
         return combined.OrderByDescending(x=>x.ConsecutiveBoards).ThenBy(x=>x.IsPreviousLimitUpFailure).ThenBy(x=>x.SealTime??DateTime.MaxValue).ToArray();
+    }
+
+    private async Task<IReadOnlyDictionary<string,string>> GetLimitUpReasonsAsync(string date,CancellationToken cancellationToken)
+    {
+        const string fields="199112,10,9001,330323,330324,330325,9002,330329,133971,133970,1968584,3475914,9003,9004";
+        var url="https://data.10jqka.com.cn/dataapi/limit_up/limit_up_pool?page=1&limit=200"
+            +$"&field={Uri.EscapeDataString(fields)}&filter=HS%2CGEM2STAR&order_field=330324&order_type=0&date={date}";
+        try
+        {
+            using var request=new HttpRequestMessage(HttpMethod.Get,url);
+            request.Headers.Referrer=new Uri("https://data.10jqka.com.cn/limit_up/continuous_limit_up/");
+            using var response=await _client.SendAsync(request,cancellationToken);response.EnsureSuccessStatusCode();
+            using var document=JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+            if(!document.RootElement.TryGetProperty("data",out var data)||data.ValueKind==JsonValueKind.Null||!data.TryGetProperty("info",out var info)||info.ValueKind!=JsonValueKind.Array)return new Dictionary<string,string>();
+            return info.EnumerateArray().Select(item=>(Code:Text(item,"code"),Reason:Text(item,"reason_type").Trim()))
+                .Where(x=>x.Code.Length==6&&!string.IsNullOrWhiteSpace(x.Reason)).GroupBy(x=>x.Code,StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group=>group.Key,group=>group.First().Reason,StringComparer.OrdinalIgnoreCase);
+        }
+        catch(OperationCanceledException){throw;}
+        catch{return new Dictionary<string,string>();}
     }
 
     private async Task<LimitUpLadderItem[]> EnrichPrimaryIndustriesAsync(LimitUpLadderItem[] items,CancellationToken cancellationToken)
