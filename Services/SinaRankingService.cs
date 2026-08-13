@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Net;
+using System.Text.RegularExpressions;
 using System.Text.Json;
 using StockTickerLite.Models;
 
@@ -6,7 +8,8 @@ namespace StockTickerLite.Services;
 
 public sealed record StockRankingItem(string Code, string Name, string Industry, decimal ChangePercent, decimal Metric);
 public sealed record IndustryRankingItem(string Code,string Name,decimal ChangePercent,string LeadingStock,decimal LeadingStockChangePercent);
-public sealed record LimitUpLadderItem(string Code,string Name,string Industry,decimal ChangePercent,int ConsecutiveBoards,int BreakCount,DateTime? SealTime,bool IsPreviousLimitUpFailure=false,int PreviousConsecutiveBoards=0,string IndustryBoard="",string PrimaryIndustry="",string LimitUpReason="");
+public sealed record LimitUpLadderItem(string Code,string Name,string Industry,decimal ChangePercent,int ConsecutiveBoards,int BreakCount,DateTime? SealTime,bool IsPreviousLimitUpFailure=false,int PreviousConsecutiveBoards=0,string IndustryBoard="",string PrimaryIndustry="",string LimitUpReason="",string ThemeType="");
+internal sealed record ThsStockClassification(string Industry,IReadOnlyList<string> Concepts);
 
 public sealed class SinaRankingService : IDisposable
 {
@@ -16,6 +19,7 @@ public sealed class SinaRankingService : IDisposable
     private readonly SinaChartService _chartService = new();
     private IReadOnlyList<LimitUpLadderItem> _lastYesterdayLimitUpPool=[];
     private readonly Dictionary<string,string> _primaryIndustryByStock=new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string,ThsStockClassification> _thsClassificationCache=new(StringComparer.OrdinalIgnoreCase);
 
     public SinaRankingService()
     {
@@ -79,17 +83,21 @@ public sealed class SinaRankingService : IDisposable
 
     public async Task<IReadOnlyList<LimitUpLadderItem>> GetLimitUpLadderAsync(CancellationToken cancellationToken)
     {
-        var date=DateTime.Now.ToString("yyyyMMdd",CultureInfo.InvariantCulture);
+        var now=DateTime.Now;
+        var date=now.ToString("yyyyMMdd",CultureInfo.InvariantCulture);
         var todayTask=GetEastmoneyLimitUpPoolAsync("getTopicZTPool","fbt:asc",date,false,cancellationToken);
         var yesterdayTask=GetEastmoneyLimitUpPoolAsync("getYesterdayZTPool","zs:desc",date,true,cancellationToken);
         var reasonsTask=GetLimitUpReasonsAsync(date,cancellationToken);
-        await Task.WhenAll(todayTask,yesterdayTask,reasonsTask);
+        var previousReasonsTask=GetPreviousTradingDayLimitUpReasonsAsync(now.Date,cancellationToken);
+        await Task.WhenAll(todayTask,yesterdayTask,reasonsTask,previousReasonsTask);
         var today=await todayTask;
         var yesterday=await yesterdayTask;
         var reasons=await reasonsTask;
-        today=today.Select(item=>reasons.TryGetValue(StockCode.Normalize(item.Code)[2..],out var reason)?item with{LimitUpReason=reason}:item).ToArray();
+        var previousReasons=await previousReasonsTask;
         try{today=today.Concat(await GetCurrentStLimitUpsAsync(cancellationToken)).GroupBy(x=>x.Code,StringComparer.OrdinalIgnoreCase).Select(x=>x.First()).ToArray();}catch{ /* 普通涨停池仍可使用 */ }
         try{yesterday=yesterday.Concat(await GetPreviousStLimitUpsAsync(cancellationToken)).GroupBy(x=>x.Code,StringComparer.OrdinalIgnoreCase).Select(x=>x.First()).ToArray();}catch{ /* 普通昨日池仍可使用 */ }
+        today=today.Select(item=>reasons.TryGetValue(StockCode.Normalize(item.Code)[2..],out var reason)?item with{LimitUpReason=reason}:item).ToArray();
+        yesterday=yesterday.Select(item=>previousReasons.TryGetValue(StockCode.Normalize(item.Code)[2..],out var reason)?item with{LimitUpReason=reason}:item).ToArray();
         if(yesterday.Count>0)_lastYesterdayLimitUpPool=yesterday;
         else if(_lastYesterdayLimitUpPool.Count>0)yesterday=_lastYesterdayLimitUpPool;
         var yesterdayByCode=yesterday.ToDictionary(x=>x.Code,StringComparer.OrdinalIgnoreCase);
@@ -97,7 +105,7 @@ public sealed class SinaRankingService : IDisposable
         var todayCodes=today.Select(x=>x.Code).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var failures=yesterday.Where(x=>!todayCodes.Contains(x.Code)).Select(x=>x with{IsPreviousLimitUpFailure=true,PreviousConsecutiveBoards=x.ConsecutiveBoards});
         var combined=today.Concat(failures).ToArray();
-        try{combined=await EnrichPoolClassificationsAsync(combined,todayCodes,cancellationToken);}catch{ /* 东财行业仍可作为降级分类 */ }
+        try{combined=await EnrichPoolClassificationsAsync(combined,cancellationToken);}catch{ /* 东财行业仍可作为降级分类 */ }
         try{combined=await EnrichPrimaryIndustriesAsync(combined,cancellationToken);}catch{ /* 二级行业仍可用于降级统计 */ }
         return combined.OrderByDescending(x=>x.ConsecutiveBoards).ThenBy(x=>x.IsPreviousLimitUpFailure).ThenBy(x=>x.SealTime??DateTime.MaxValue).ToArray();
     }
@@ -120,6 +128,18 @@ public sealed class SinaRankingService : IDisposable
         }
         catch(OperationCanceledException){throw;}
         catch{return new Dictionary<string,string>();}
+    }
+
+    private async Task<IReadOnlyDictionary<string,string>> GetPreviousTradingDayLimitUpReasonsAsync(DateTime currentDate,CancellationToken cancellationToken)
+    {
+        for(var daysBack=1;daysBack<=7;daysBack++)
+        {
+            var candidate=currentDate.AddDays(-daysBack);
+            if(candidate.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)continue;
+            var reasons=await GetLimitUpReasonsAsync(candidate.ToString("yyyyMMdd",CultureInfo.InvariantCulture),cancellationToken);
+            if(reasons.Count>0)return reasons;
+        }
+        return new Dictionary<string,string>();
     }
 
     private async Task<LimitUpLadderItem[]> EnrichPrimaryIndustriesAsync(LimitUpLadderItem[] items,CancellationToken cancellationToken)
@@ -186,17 +206,85 @@ public sealed class SinaRankingService : IDisposable
     private static string EastmoneyCode(string rawCode)=>rawCode.Length!=6?string.Empty:rawCode.StartsWith('6')?"sh"+rawCode:rawCode.StartsWith('8')||rawCode.StartsWith('9')?"bj"+rawCode:"sz"+rawCode;
     private static bool IsLimitPrice(string code,string name,decimal current,decimal previousClose){var rate=LimitRate(code,name);return rate>0&&previousClose>0&&current==decimal.Round(previousClose*(1+rate),2,MidpointRounding.AwayFromZero);}
 
-    private async Task<LimitUpLadderItem[]> EnrichPoolClassificationsAsync(LimitUpLadderItem[] items,IReadOnlySet<string> todayCodes,CancellationToken cancellationToken)
+    private async Task<LimitUpLadderItem[]> EnrichPoolClassificationsAsync(LimitUpLadderItem[] items,CancellationToken cancellationToken)
     {
-        var quotes=new Dictionary<string,StockQuote>(StringComparer.OrdinalIgnoreCase);
-        foreach(var batch in items.Select(x=>x.Code).Distinct(StringComparer.OrdinalIgnoreCase).Chunk(50))
+        var classifications=new Dictionary<string,ThsStockClassification>(StringComparer.OrdinalIgnoreCase);
+        using var gate=new SemaphoreSlim(6);
+        await Task.WhenAll(items.Select(x=>x.Code).Distinct(StringComparer.OrdinalIgnoreCase).Select(async code=>
         {
-            var part=await _quoteService.GetQuotesAsync(batch,cancellationToken,includeExtendedInfo:true);
-            foreach(var pair in part)quotes[pair.Key]=pair.Value;
+            await gate.WaitAsync(cancellationToken);
+            try
+            {
+                ThsStockClassification classification;
+                try{classification=await GetThsClassificationAsync(code,cancellationToken);}
+                catch(OperationCanceledException){throw;}
+                catch{classification=new ThsStockClassification(string.Empty,[]);}
+                lock(classifications)classifications[code]=classification;
+            }
+            finally{gate.Release();}
+        }));
+        return items.Select(item=>
+        {
+            if(!classifications.TryGetValue(item.Code,out var classification))return item;
+            var industry=string.IsNullOrWhiteSpace(classification.Industry)?item.IndustryBoard:classification.Industry;
+            var reasonTheme=SelectReasonTheme(classification,industry,item.LimitUpReason);
+            if(reasonTheme is not null)return item with{Industry=reasonTheme.Value.Name,ThemeType=reasonTheme.Value.Type,IndustryBoard=industry};
+            return item with{Industry=industry,ThemeType="行业",IndustryBoard=industry};
+        }).ToArray();
+    }
+
+    private async Task<ThsStockClassification> GetThsClassificationAsync(string code,CancellationToken cancellationToken)
+    {
+        var rawCode=StockCode.Normalize(code)[2..];
+        lock(_thsClassificationCache)if(_thsClassificationCache.TryGetValue(rawCode,out var cached))return cached;
+        using var request=new HttpRequestMessage(HttpMethod.Get,$"https://basic.10jqka.com.cn/{rawCode}/");
+        request.Headers.Referrer=new Uri("https://basic.10jqka.com.cn/");
+        using var response=await _client.SendAsync(request,cancellationToken);response.EnsureSuccessStatusCode();
+        var bytes=await response.Content.ReadAsByteArrayAsync(cancellationToken);
+        var html=System.Text.Encoding.GetEncoding("GB18030").GetString(bytes);
+        var text=HtmlToText(html);
+        var industry=Regex.Match(text,@"所属(?:申万)?行业\s*[：:]\s*([^\s|]+)",RegexOptions.IgnoreCase).Groups[1].Value.Trim();
+        var conceptText=Regex.Match(text,@"概念行情贴合度\s*[：:]\s*(.*?)\s*详情",RegexOptions.IgnoreCase|RegexOptions.Singleline).Groups[1].Value;
+        var concepts=conceptText.Split(new[]{'，',',','、'},StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries)
+            .Select(NormalizeConcept).Where(x=>x.Length>0).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var result=new ThsStockClassification(industry,concepts);
+        lock(_thsClassificationCache)_thsClassificationCache[rawCode]=result;
+        return result;
+    }
+
+    private static string HtmlToText(string html)
+    {
+        var withBreaks=Regex.Replace(html,@"</?(?:div|p|li|tr|td|th|br|h[1-6])\b[^>]*>"," ",RegexOptions.IgnoreCase);
+        var withoutTags=Regex.Replace(withBreaks,@"<[^>]+>",string.Empty);
+        return Regex.Replace(WebUtility.HtmlDecode(withoutTags),@"\s+"," ").Trim();
+    }
+
+    private static (string Name,string Type)? SelectReasonTheme(ThsStockClassification classification,string industryBoard,string reason)
+    {
+        if(string.IsNullOrWhiteSpace(reason))return null;
+        var concepts=classification.Concepts.Where(x=>!NonThemeConcepts.Contains(x)).ToArray();
+        var industries=new[]{classification.Industry,industryBoard}.Where(x=>!string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        foreach(var raw in reason.Split(new[]{'+','＋','、','/'},StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries))
+        {
+            if(concepts.Any(concept=>ThemeEquals(concept,raw)))return (raw,"概念");
+            if(industries.Any(industry=>ThemeEquals(industry,raw)))return (raw,"行业");
         }
-        var changes=await GetConceptChangesAsync(cancellationToken);
-        var counts=quotes.Values.Where(x=>todayCodes.Contains(x.Code)).SelectMany(x=>x.Concepts.Select(NormalizeConcept)).Where(x=>x.Length>0).GroupBy(x=>x,StringComparer.OrdinalIgnoreCase).ToDictionary(x=>x.Key,x=>x.Count(),StringComparer.OrdinalIgnoreCase);
-        return items.Select(item=>quotes.TryGetValue(item.Code,out var quote)?item with{Industry=SelectRelevantConcept(quote,changes,counts)}:item).ToArray();
+        return null;
+    }
+
+    private static bool ThemeEquals(string known,string candidate)
+    {
+        var left=NormalizeThemeName(known);var right=NormalizeThemeName(candidate);
+        if(left.Length<2||right.Length<2)return false;
+        return left.Equals(right,StringComparison.OrdinalIgnoreCase)
+            || left.Length>=4&&right.Contains(left,StringComparison.OrdinalIgnoreCase)
+            || right.Length>=4&&left.Contains(right,StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeThemeName(string value)
+    {
+        var name=NormalizeConcept(value).Replace("Ⅱ","",StringComparison.Ordinal).Replace("Ⅰ","",StringComparison.Ordinal).Trim();
+        return name.EndsWith("行业",StringComparison.Ordinal)?name[..^2]:name;
     }
 
     private async Task<IReadOnlyList<LimitUpLadderItem>> GetEastmoneyLimitUpPoolAsync(string endpoint,string sort,string date,bool yesterday,CancellationToken cancellationToken)
@@ -224,31 +312,6 @@ public sealed class SinaRankingService : IDisposable
     {
         if(value<=0)return null;var text=value.ToString("D6",CultureInfo.InvariantCulture);
         return DateTime.TryParseExact(DateTime.Now.ToString("yyyyMMdd",CultureInfo.InvariantCulture)+text,"yyyyMMddHHmmss",CultureInfo.InvariantCulture,DateTimeStyles.None,out var time)?time:null;
-    }
-
-    private async Task<IReadOnlyDictionary<string,decimal>> GetConceptChangesAsync(CancellationToken cancellationToken)
-    {
-        const string url="https://money.finance.sina.com.cn/q/view/newFLJK.php?param=class";
-        using var response=await _client.GetAsync(url,cancellationToken);response.EnsureSuccessStatusCode();
-        var bytes=await response.Content.ReadAsByteArrayAsync(cancellationToken);var script=System.Text.Encoding.GetEncoding("GB18030").GetString(bytes);
-        var start=script.IndexOf('{');var end=script.LastIndexOf('}');var result=new Dictionary<string,decimal>(StringComparer.OrdinalIgnoreCase);
-        if(start<0||end<=start)return result;
-        using var document=JsonDocument.Parse(script[start..(end+1)]);
-        foreach(var property in document.RootElement.EnumerateObject())
-        {
-            var fields=property.Value.GetString()?.Split(',');if(fields is null||fields.Length<=5)continue;
-            var name=NormalizeConcept(fields[1]);if(name.Length==0)continue;
-            if(decimal.TryParse(fields[5],NumberStyles.Float,CultureInfo.InvariantCulture,out var change))result[name]=change;
-        }
-        return result;
-    }
-
-    private static string SelectRelevantConcept(StockQuote quote,IReadOnlyDictionary<string,decimal> changes,IReadOnlyDictionary<string,int> limitUps)
-    {
-        var candidates=quote.Concepts.Select(NormalizeConcept).Where(x=>x.Length>0&&!NonThemeConcepts.Contains(x)).Distinct(StringComparer.OrdinalIgnoreCase)
-            .Select(name=>(Name:name,Change:changes.TryGetValue(name,out var change)?change:decimal.MinValue,Count:limitUps.TryGetValue(name,out var count)?count:0))
-            .Where(x=>x.Change!=decimal.MinValue).OrderByDescending(x=>x.Count).ThenByDescending(x=>x.Change).ToArray();
-        return candidates.Length>0?candidates[0].Name:quote.Industry;
     }
 
     private static string NormalizeConcept(string value)

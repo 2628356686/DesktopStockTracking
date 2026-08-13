@@ -16,14 +16,17 @@ public sealed class StockDetailsForm : Form
     private CancellationTokenSource? _cts;
     private bool _refreshing;
     private bool _hasData;
+    private readonly StockQuote _latestQuote;
+    private readonly Func<string,CancellationToken,Task<IReadOnlyList<IntradayPoint>>>? _customChartLoader;
 
-    public StockDetailsForm(StockItem stock,StockQuote quote,IReadOnlyList<(DateTime Time,decimal Price)> history,string chartType,int refreshSeconds)
+    public StockDetailsForm(StockItem stock,StockQuote quote,IReadOnlyList<(DateTime Time,decimal Price)> history,string chartType,int refreshSeconds,Func<string,CancellationToken,Task<IReadOnlyList<IntradayPoint>>>? customChartLoader=null)
     {
-        _code=stock.NormalizedCode;_chartType=chartType;
+        _code=customChartLoader is null?stock.NormalizedCode:stock.Code;_chartType=chartType;_latestQuote=quote;_customChartLoader=customChartLoader;
         Text="当日分时图";StartPosition=FormStartPosition.CenterParent;Size=new Size(760,540);MinimumSize=new Size(500,360);Font=new Font("Microsoft YaHei UI",9);
         var top=new Panel{Dock=DockStyle.Top,Height=125,Padding=new Padding(18,14,18,6)};var name=string.IsNullOrWhiteSpace(stock.DisplayName)?quote.Name:stock.DisplayName;
-        _title.Text=$"{name}  {quote.Code}";_title.ForeColor=quote.Change>0?Color.Red:quote.Change<0?Color.Green:Color.Black;
-        _details.Text=$"现价 {quote.Current,10:0.00}    涨跌 {quote.Change,9:+0.00;-0.00;0.00}    涨幅 {quote.ChangePercent,8:+0.00;-0.00;0.00}%\r\n"+$"今开 {quote.Open,10:0.00}    最高 {quote.High,9:0.00}    最低 {quote.Low,10:0.00}\r\n"+$"昨收 {quote.PreviousClose,10:0.00}    成交量 {quote.Volume/10000m,7:0.00}万    成交额 {quote.Amount/100000000m,7:0.00}亿";
+        _title.Text=$"{name}  {quote.Code}";_title.ForeColor=Color.Black;
+        _details.Text=FormatLatestDetails();_details.ForeColor=ChangeColor(_latestQuote.Change);
+        _canvas.HoverPointChanged+=ShowHoverDetails;
         _title.Location=new Point(18,12);_details.Location=new Point(18,48);top.Controls.Add(_title);top.Controls.Add(_details);_canvas.SetLoading(quote.PreviousClose);Controls.Add(_canvas);Controls.Add(top);
         _refreshTimer.Interval=chartType=="分时图"?Math.Clamp(refreshSeconds,1,10)*1000:60000;
         _refreshTimer.Tick+=async (_,_)=>await RefreshChartAsync();
@@ -32,13 +35,24 @@ public sealed class StockDetailsForm : Form
     public void SetChartData(IReadOnlyList<IntradayPoint> data,string chartType){Text=chartType;_canvas.SetData(data,chartType);}
     public void SetChartError(string message)=>_canvas.SetError(message);
 
+    private string FormatLatestDetails()=>$"现价 {_latestQuote.Current,10:0.00}    涨跌 {_latestQuote.Change,9:+0.00;-0.00;0.00}    涨幅 {_latestQuote.ChangePercent,8:+0.00;-0.00;0.00}%\r\n"+$"今开 {_latestQuote.Open,10:0.00}    最高 {_latestQuote.High,9:0.00}    最低 {_latestQuote.Low,10:0.00}\r\n"+$"昨收 {_latestQuote.PreviousClose,10:0.00}    成交量 {_latestQuote.Volume/10000m,7:0.00}万    成交额 {_latestQuote.Amount/100000000m,7:0.00}亿";
+    private void ShowHoverDetails(IntradayPoint? point,decimal? reference)
+    {
+        if(point is null){_details.Text=FormatLatestDetails();_details.ForeColor=ChangeColor(_latestQuote.Change);return;}
+        var previous=reference.GetValueOrDefault(point.Open);var change=point.Price-previous;var percent=previous==0?0:change/previous*100;
+        _details.ForeColor=ChangeColor(change);
+        var dateLabel=_chartType=="分时图"?$"{point.Time:yyyy-MM-dd HH:mm}":$"{point.Time:yyyy-MM-dd}";
+        _details.Text=$"{dateLabel}    收盘 {point.Price,8:0.00}    涨跌 {change,9:+0.00;-0.00;0.00}    涨幅 {percent,8:+0.00;-0.00;0.00}%\r\n"+$"开盘 {point.Open,10:0.00}    最高 {point.High,9:0.00}    最低 {point.Low,10:0.00}\r\n"+$"昨收 {previous,10:0.00}    成交量 {point.Volume/10000d,7:0.00}万    成交额 {point.Amount/100000000m,7:0.00}亿";
+    }
+    private static Color ChangeColor(decimal change)=>change>0?Color.FromArgb(210,35,35):change<0?Color.FromArgb(0,135,65):Color.FromArgb(45,45,45);
+
     private async Task RefreshChartAsync()
     {
         if(_refreshing||IsDisposed)return;_refreshing=true;
         _cts?.Cancel();_cts?.Dispose();_cts=new CancellationTokenSource();
         try
         {
-            var data=await _charts.GetChartAsync(_code,_chartType,_cts.Token);
+            var data=_customChartLoader is null?await _charts.GetChartAsync(_code,_chartType,_cts.Token):await _customChartLoader(_chartType,_cts.Token);
             if(IsDisposed)return;SetChartData(data,_chartType);_hasData=data.Count>0;
         }
         catch(OperationCanceledException){}
@@ -53,16 +67,25 @@ public sealed class StockDetailsForm : Form
 
     private sealed class PriceCanvas:Control
     {
-        private IReadOnlyList<IntradayPoint> _data=[];private decimal _previous;private string? _message;private string _chartType="分时图";private int _hover=-1;private Rectangle _plot;private Rectangle _volumePlot;
-        public PriceCanvas(){DoubleBuffered=true;ResizeRedraw=true;BackColor=Color.White;Cursor=Cursors.Cross;SetStyle(ControlStyles.AllPaintingInWmPaint|ControlStyles.UserPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw,true);MouseMove+=MoveHover;MouseLeave+=(_,_)=>{_hover=-1;Invalidate();};}
+        private IReadOnlyList<IntradayPoint> _data=[];private IReadOnlyList<IntradayPoint> _allData=[];private int _visibleCount;private decimal _previous;private string? _message;private string _chartType="分时图";private int _hover=-1;private Rectangle _plot;private Rectangle _volumePlot;
+        public event Action<IntradayPoint?,decimal?>? HoverPointChanged;
+        public PriceCanvas(){DoubleBuffered=true;ResizeRedraw=true;BackColor=Color.White;Cursor=Cursors.Cross;TabStop=true;SetStyle(ControlStyles.AllPaintingInWmPaint|ControlStyles.UserPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw|ControlStyles.Selectable,true);MouseMove+=MoveHover;MouseWheel+=ZoomXAxis;MouseEnter+=(_,_)=>Focus();MouseLeave+=(_,_)=>{_hover=-1;HoverPointChanged?.Invoke(null,null);Invalidate();};}
         public void SetLoading(decimal previous){_previous=previous;_message="正在加载当天 1 分钟行情…";Invalidate();}
-        public void SetData(IReadOnlyList<IntradayPoint> data,string chartType){_data=data;_chartType=chartType;_message=data.Count<2?"暂无足够的行情数据":null;_hover=-1;Invalidate();}
-        public void SetError(string message){_data=[];_message=message;Invalidate();}
+        public void SetData(IReadOnlyList<IntradayPoint> data,string chartType){var preserveZoom=_chartType==chartType&&_visibleCount>0&&_visibleCount<_allData.Count;_allData=data;_chartType=chartType;if(chartType=="分时图")_visibleCount=data.Count;else if(!preserveZoom)_visibleCount=data.Count;else _visibleCount=Math.Clamp(_visibleCount,Math.Min(20,data.Count),data.Count);ApplyVisibleRange();_message=data.Count<2?"暂无足够的行情数据":null;_hover=-1;HoverPointChanged?.Invoke(null,null);Invalidate();}
+        public void SetError(string message){_data=[];_allData=[];_visibleCount=0;_message=message;Invalidate();}
+        private void ApplyVisibleRange(){_data=_visibleCount>0&&_visibleCount<_allData.Count?_allData.TakeLast(_visibleCount).ToArray():_allData;}
+        private void ZoomXAxis(object? sender,MouseEventArgs e)
+        {
+            if(_chartType=="分时图"||_allData.Count<3)return;
+            var minimum=Math.Min(20,_allData.Count);var current=_visibleCount<=0?_allData.Count:_visibleCount;
+            var step=Math.Max(5,(int)Math.Round(current*.12));var next=e.Delta>0?current-step:current+step;
+            _visibleCount=Math.Clamp(next,minimum,_allData.Count);ApplyVisibleRange();_hover=-1;Invalidate();
+        }
         protected override void OnPaint(PaintEventArgs e)
         {
             base.OnPaint(e);var g=e.Graphics;g.SmoothingMode=SmoothingMode.AntiAlias;g.Clear(BackColor);var intraday=_chartType=="分时图";var left=Math.Min(62,Math.Max(42,Width/7));var plotTop=intraday?34:78;var plotWidth=Math.Max(30,ClientSize.Width-left-22);var availableHeight=Math.Max(30,ClientSize.Height-plotTop-38);if(intraday){_plot=new Rectangle(left,plotTop,plotWidth,availableHeight);_volumePlot=Rectangle.Empty;}else{var gap=16;var volumeHeight=Math.Clamp((int)(availableHeight*.20f),42,100);var priceHeight=Math.Max(45,availableHeight-volumeHeight-gap);if(priceHeight+volumeHeight+gap>availableHeight)volumeHeight=Math.Max(24,availableHeight-priceHeight-gap);_plot=new Rectangle(left,plotTop,plotWidth,priceHeight);_volumePlot=new Rectangle(left,_plot.Bottom+gap,plotWidth,volumeHeight);}
             using var grid=new Pen(Color.FromArgb(228,232,238));for(var i=0;i<=4;i++){var y=_plot.Top+_plot.Height*i/4;g.DrawLine(grid,_plot.Left,y,_plot.Right,y);}for(var i=0;i<=4;i++){var x=_plot.Left+_plot.Width*i/4;g.DrawLine(grid,x,_plot.Top,x,_plot.Bottom);}g.DrawRectangle(Pens.Silver,_plot);if(!intraday&&!_volumePlot.IsEmpty){for(var i=0;i<=4;i++){var x=_volumePlot.Left+_volumePlot.Width*i/4;g.DrawLine(grid,x,_volumePlot.Top,x,_volumePlot.Bottom);}g.DrawRectangle(Pens.Silver,_volumePlot);g.DrawString("成交量",Font,Brushes.DimGray,_volumePlot.Left+4,_volumePlot.Top+3);}
-            using var priceLegend=new Pen(Color.FromArgb(30,105,210),2);using var avgLegend=new Pen(Color.FromArgb(232,145,25),2);if(intraday){g.DrawLine(priceLegend,_plot.Left,_plot.Top-18,_plot.Left+22,_plot.Top-18);g.DrawString("价格",Font,Brushes.DimGray,_plot.Left+26,_plot.Top-26);g.DrawLine(avgLegend,_plot.Left+88,_plot.Top-18,_plot.Left+110,_plot.Top-18);g.DrawString("均价",Font,Brushes.DimGray,_plot.Left+114,_plot.Top-26);}else DrawMaLegend(g);
+            using var priceLegend=new Pen(Color.FromArgb(30,105,210),2);using var avgLegend=new Pen(Color.FromArgb(232,145,25),2);if(intraday){g.DrawLine(priceLegend,_plot.Left,_plot.Top-18,_plot.Left+22,_plot.Top-18);g.DrawString("价格",Font,Brushes.DimGray,_plot.Left+26,_plot.Top-26);g.DrawLine(avgLegend,_plot.Left+88,_plot.Top-18,_plot.Left+110,_plot.Top-18);g.DrawString("均价",Font,Brushes.DimGray,_plot.Left+114,_plot.Top-26);}else{DrawMaLegend(g);var zoomText=$"滚轮缩放X轴  当前 {_data.Count}/{_allData.Count}";var zoomSize=g.MeasureString(zoomText,Font);g.DrawString(zoomText,Font,Brushes.Gray,_plot.Right-zoomSize.Width,_plot.Top-27);}
             if(_data.Count<2){g.DrawString(_message??"暂无数据",Font,Brushes.Gray,_plot.Left+20,_plot.Top+30);return;}
             var min=intraday?new[]{_data.Min(x=>x.Price),_data.Min(x=>x.Average),_previous}.Where(x=>x>0).Min():_data.Min(x=>x.Low);var max=intraday?new[]{_data.Max(x=>x.Price),_data.Max(x=>x.Average),_previous}.Max():_data.Max(x=>x.High);var pad=(max-min)*0.08m;if(pad<=0)pad=Math.Max(0.01m,max*0.005m);min-=pad;max+=pad;
             float X(int i)=>_plot.Left+(float)i/(_data.Count-1)*_plot.Width;float Y(decimal p)=>_plot.Bottom-(float)((p-min)/(max-min))*_plot.Height;
@@ -81,8 +104,8 @@ public sealed class StockDetailsForm : Form
         }
         private static readonly (int Period,Color Color)[] MaStyles=
         [
-            (5,Color.FromArgb(55,120,220)),(10,Color.FromArgb(235,145,25)),(20,Color.FromArgb(190,65,180)),
-            (30,Color.FromArgb(30,160,150)),(60,Color.FromArgb(120,85,205)),(120,Color.FromArgb(110,110,110))
+            (5,Color.Black),(10,Color.FromArgb(225,175,0)),(20,Color.FromArgb(210,35,35)),
+            (30,Color.FromArgb(0,145,70)),(60,Color.FromArgb(35,95,210)),(120,Color.FromArgb(125,65,100))
         ];
         private decimal? MovingAverage(int index,int period)
         {
@@ -124,7 +147,7 @@ public sealed class StockDetailsForm : Form
         private string FormatMa(int index,int period)=>MovingAverage(index,period)?.ToString("0.00")??"--";
         private void MoveHover(object? sender,MouseEventArgs e)
         {
-            var hoverBounds=_volumePlot.IsEmpty?_plot:Rectangle.FromLTRB(_plot.Left,_plot.Top,_plot.Right,_volumePlot.Bottom);if(_data.Count<2||!hoverBounds.Contains(e.Location)){if(_hover!=-1){_hover=-1;Invalidate();}return;}var index=(int)Math.Round((e.X-_plot.Left)/(double)Math.Max(1,_plot.Width)*(_data.Count-1));index=Math.Clamp(index,0,_data.Count-1);if(index!=_hover){_hover=index;Invalidate();}
+            var hoverBounds=_volumePlot.IsEmpty?_plot:Rectangle.FromLTRB(_plot.Left,_plot.Top,_plot.Right,_volumePlot.Bottom);if(_data.Count<2||!hoverBounds.Contains(e.Location)){if(_hover!=-1){_hover=-1;HoverPointChanged?.Invoke(null,null);Invalidate();}return;}var index=(int)Math.Round((e.X-_plot.Left)/(double)Math.Max(1,_plot.Width)*(_data.Count-1));index=Math.Clamp(index,0,_data.Count-1);if(index!=_hover){_hover=index;var sourceIndex=_allData.Count-_data.Count+index;var reference=_chartType=="分时图"?_previous:sourceIndex>0?_allData[sourceIndex-1].Price:_data[index].Open;HoverPointChanged?.Invoke(_data[index],reference);Invalidate();}
         }
     }
 }

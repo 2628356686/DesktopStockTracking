@@ -14,11 +14,13 @@ public sealed class SettingsForm : Form
     private readonly SinaStockSearchService _searchService = new();
     private readonly SinaRankingService _rankingService = new();
     private readonly SinaQuoteService _rankingQuoteService = new();
+    private readonly SinaFuturesService _futuresService = new();
     private readonly System.Windows.Forms.Timer _searchTimer = new() { Interval = 180 };
     private CancellationTokenSource? _searchCts;
     private CancellationTokenSource? _rankingCts;
     private CancellationTokenSource? _limitUpCts;
     private CancellationTokenSource? _rankingChartCts;
+    private CancellationTokenSource? _futuresCts;
     private readonly ComboBox _codeMode = Combo("完整代码", "最后3位代码", "最后2位代码", "不显示");
     private readonly CheckBox _showBoard = new() { Text = "显示证券板块", AutoSize = true };
     private readonly ComboBox _nameMode = Combo("完整名称", "前2个字", "第1个字", "最后2个字", "最后1个字", "不显示", "强制4字符");
@@ -67,6 +69,12 @@ public sealed class SettingsForm : Form
     private readonly Label _rankingStatus = new() { Text = "等待加载", AutoSize = true, ForeColor = Color.DimGray };
     private readonly Button _refreshLimitUps = new() { Text = "刷新天梯", AutoSize = true, UseVisualStyleBackColor = true };
     private readonly Label _limitUpStatus = new() { Text = "等待加载", AutoSize = true, ForeColor = Color.DimGray };
+    private readonly DataGridView _allFutures=FuturesGrid();
+    private readonly HorizontalFlowPanel _risingFuturesStrip=new();
+    private readonly HorizontalFlowPanel _fallingFuturesStrip=new();
+    private readonly Label _futuresStatus=new(){Text="等待加载",AutoSize=true,ForeColor=Color.DimGray};
+    private readonly Button _refreshFutures=new(){Text="刷新期货",AutoSize=true,UseVisualStyleBackColor=true};
+    private readonly System.Windows.Forms.Timer _futuresTimer=new(){Interval=5000};
     private readonly ToolTip _tips = new();
 
     [Browsable(false)]
@@ -78,11 +86,12 @@ public sealed class SettingsForm : Form
         Result = Clone(source);
         _limitUpResizeTimer.Tick+=(_,_)=>{_limitUpResizeTimer.Stop();RenderLimitUpLadder();};
         Text = "设置"; StartPosition = FormStartPosition.CenterScreen; FormBorderStyle = FormBorderStyle.Sizable;
-        MaximizeBox = true; MinimizeBox = false; ClientSize = new Size(600, 500); MinimumSize = new Size(355, 349);
+        MaximizeBox = true; MinimizeBox = false; ClientSize = new Size(1100, 800); MinimumSize = new Size(355, 349);
         Font = new Font("宋体", 9);
-        var tabs = new TabControl();var limitUpPage=BuildLimitUpLadderPage();var limitUpLoaded=false;
-        tabs.TabPages.Add(BuildStocksPage()); tabs.TabPages.Add(BuildRankingPage()); tabs.TabPages.Add(limitUpPage); tabs.TabPages.Add(BuildDisplayPage()); tabs.TabPages.Add(BuildAdvancedPage()); tabs.TabPages.Add(BuildChartPage()); tabs.TabPages.Add(BuildMonitorPage()); tabs.TabPages.Add(BuildOtherPage());
-        tabs.Selected+=async(_,_)=>{if(tabs.SelectedTab!=limitUpPage||limitUpLoaded)return;limitUpLoaded=true;await LoadLimitUpLadderAsync();};
+        var tabs = new TabControl();var limitUpPage=BuildLimitUpLadderPage();var futuresPage=BuildFuturesPage();var limitUpLoaded=false;var futuresLoaded=false;
+        tabs.TabPages.Add(BuildStocksPage()); tabs.TabPages.Add(BuildRankingPage()); tabs.TabPages.Add(limitUpPage);tabs.TabPages.Add(futuresPage); tabs.TabPages.Add(BuildDisplayPage()); tabs.TabPages.Add(BuildAdvancedPage()); tabs.TabPages.Add(BuildChartPage()); tabs.TabPages.Add(BuildMonitorPage()); tabs.TabPages.Add(BuildOtherPage());
+        tabs.Selected+=async(_,_)=>{_futuresTimer.Enabled=tabs.SelectedTab==futuresPage;if(tabs.SelectedTab==limitUpPage&&!limitUpLoaded){limitUpLoaded=true;await LoadLimitUpLadderAsync();}if(tabs.SelectedTab==futuresPage&&!futuresLoaded){futuresLoaded=true;await LoadFuturesAsync();}};
+        _futuresTimer.Tick+=async(_,_)=>await LoadFuturesAsync();
         var ok = new Button { Text = "确定", Size = new Size(80, 29), FlatStyle = FlatStyle.System, UseVisualStyleBackColor = true };
         var cancel = new Button { Text = "取消", Size = new Size(80, 29), FlatStyle = FlatStyle.System, UseVisualStyleBackColor = true, DialogResult = DialogResult.Cancel };
         ok.Click += (_, _) => { if (ReadControls()) { DialogResult = DialogResult.OK; Close(); } };
@@ -175,6 +184,84 @@ public sealed class SettingsForm : Form
         layout.Controls.Add(_limitUpTitle,0,0);layout.Controls.Add(summaries,0,1);layout.Controls.Add(toolbar,0,2);layout.Controls.Add(_limitUpLadder,0,3);
         layout.Controls.Add(new Label{Text="涨停股池来自东方财富，ST涨停按实时行情补充",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleCenter,ForeColor=Color.DimGray,AutoEllipsis=true},0,4);
         _limitUpLadder.SizeChanged+=(_,_)=>{_limitUpResizeTimer.Stop();_limitUpResizeTimer.Start();};page.Controls.Add(layout);return page;
+    }
+
+    private TabPage BuildFuturesPage()
+    {
+        var page=Page("期货");var layout=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(8,8,8,6),ColumnCount=1,RowCount=4};
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,138));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,138));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+        var toolbar=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=2,Margin=Padding.Empty};toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        _futuresStatus.Anchor=AnchorStyles.Left;_futuresStatus.Margin=new Padding(4,0,4,0);toolbar.Controls.Add(_futuresStatus,0,0);_refreshFutures.Anchor=AnchorStyles.Right;_refreshFutures.Click+=async(_,_)=>await LoadFuturesAsync();toolbar.Controls.Add(_refreshFutures,1,0);
+        layout.Controls.Add(toolbar,0,0);layout.Controls.Add(FuturesStripGroup("热门上涨",_risingFuturesStrip,Color.FromArgb(210,35,35)),0,1);layout.Controls.Add(FuturesStripGroup("热门下跌",_fallingFuturesStrip,Color.FromArgb(0,135,65)),0,2);layout.Controls.Add(_allFutures,0,3);
+        ConfigureFuturesContextMenu(_allFutures);page.Controls.Add(layout);return page;
+        static Control FuturesStripGroup(string title,Control strip,Color color){var group=new GroupBox{Text=title,Dock=DockStyle.Fill,Margin=new Padding(0,3,0,3),ForeColor=color,Font=new Font("宋体",9,FontStyle.Bold),Padding=new Padding(8,21,8,7)};group.Controls.Add(strip);return group;}
+    }
+
+    private void ConfigureFuturesContextMenu(params DataGridView[] grids)
+    {
+        var menu=new ContextMenuStrip();var minute=menu.Items.Add("查看分时图");var daily=menu.Items.Add("查看K线图");
+        minute.Click+=async(_,_)=>await OpenSelectedFuturesChartAsync(menu,"分时图");daily.Click+=async(_,_)=>await OpenSelectedFuturesChartAsync(menu,"日K线");
+        foreach(var grid in grids){grid.ContextMenuStrip=menu;grid.MouseDown+=(_,e)=>{if(e.Button!=MouseButtons.Right)return;var hit=grid.HitTest(e.X,e.Y);if(hit.RowIndex<0)return;grid.ClearSelection();grid.Rows[hit.RowIndex].Selected=true;grid.CurrentCell=grid.Rows[hit.RowIndex].Cells[0];};}
+    }
+
+    private async Task LoadFuturesAsync()
+    {
+        if(!_refreshFutures.Enabled)return;_futuresCts?.Cancel();_futuresCts?.Dispose();_futuresCts=new CancellationTokenSource();var token=_futuresCts.Token;_refreshFutures.Enabled=false;
+        try
+        {
+            _futuresStatus.Text="正在加载期货实时行情...";var items=await _futuresService.GetQuotesAsync(token);if(token.IsCancellationRequested||IsDisposed)return;
+            FillFuturesGrid(_allFutures,items);FillFuturesStrip(_risingFuturesStrip,items.OrderByDescending(x=>x.ChangePercent).Take(5),true);FillFuturesStrip(_fallingFuturesStrip,items.OrderBy(x=>x.ChangePercent).Take(5),false);
+            _futuresStatus.Text=$"{items.Count}个连续合约，更新于 {DateTime.Now:HH:mm:ss}";
+        }
+        catch(OperationCanceledException){}
+        catch(Exception ex){if(!IsDisposed)_futuresStatus.Text="期货行情加载失败："+ex.Message;}
+        finally{if(!IsDisposed&&!token.IsCancellationRequested)_refreshFutures.Enabled=true;}
+    }
+
+    private static void FillFuturesGrid(DataGridView grid,IEnumerable<FuturesQuote> source)
+    {
+        var firstVisible=grid.Rows.Count>0?grid.FirstDisplayedScrollingRowIndex:-1;var selectedSymbol=grid.CurrentRow?.Tag is FuturesQuote selected?selected.Symbol:null;
+        grid.SuspendLayout();try
+        {
+            grid.Rows.Clear();var index=0;foreach(var item in source){var row=grid.Rows.Add(++index,item.Symbol,item.Name,item.Current.ToString("0.####"),item.Change.ToString("+0.####;-0.####;0"),item.ChangePercent.ToString("+0.00;-0.00;0.00")+"%",item.Volume.ToString("N0"),item.Position.ToString("N0"),item.QuoteTime?.ToString("HH:mm:ss")??"--");grid.Rows[row].Tag=item;var color=item.ChangePercent>0?Color.Red:item.ChangePercent<0?Color.FromArgb(0,145,70):Color.Black;grid.Rows[row].Cells[3].Style.ForeColor=color;grid.Rows[row].Cells[4].Style.ForeColor=color;grid.Rows[row].Cells[5].Style.ForeColor=color;}
+            if(!string.IsNullOrWhiteSpace(selectedSymbol)){var selectedRow=grid.Rows.Cast<DataGridViewRow>().FirstOrDefault(x=>x.Tag is FuturesQuote quote&&quote.Symbol.Equals(selectedSymbol,StringComparison.OrdinalIgnoreCase));if(selectedRow is not null){selectedRow.Selected=true;grid.CurrentCell=selectedRow.Cells[0];}}
+            if(firstVisible>=0&&grid.Rows.Count>0)grid.FirstDisplayedScrollingRowIndex=Math.Min(firstVisible,grid.Rows.Count-1);
+        }
+        finally{grid.ResumeLayout();}
+    }
+
+    private void FillFuturesStrip(HorizontalFlowPanel strip,IEnumerable<FuturesQuote> source,bool rising)
+    {
+        var scroll=Math.Abs(strip.AutoScrollPosition.X);strip.SuspendLayout();try
+        {
+            strip.Controls.Clear();foreach(var item in source)
+            {
+                var color=rising?Color.FromArgb(205,42,42):Color.FromArgb(0,132,67);var background=rising?Color.FromArgb(255,245,245):Color.FromArgb(242,252,247);
+                var card=new TableLayoutPanel{Width=210,Height=76,Margin=new Padding(5,6,5,6),Padding=new Padding(8,6,8,6),BackColor=background,CellBorderStyle=TableLayoutPanelCellBorderStyle.Single,ColumnCount=2,RowCount=2,Cursor=Cursors.Hand};
+                card.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,68));card.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,32));card.RowStyles.Add(new RowStyle(SizeType.Percent,52));card.RowStyles.Add(new RowStyle(SizeType.Percent,48));
+                var name=new Label{Text=item.Name,Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleLeft,ForeColor=Color.FromArgb(45,45,45),Font=new Font("宋体",10,FontStyle.Bold),AutoEllipsis=true,Cursor=Cursors.Hand};
+                var percent=new Label{Text=item.ChangePercent.ToString("+0.00;-0.00;0.00")+"%",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleRight,ForeColor=color,Font=new Font("Consolas",10,FontStyle.Bold),Cursor=Cursors.Hand};
+                var symbol=new Label{Text=item.Symbol,Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleLeft,ForeColor=Color.DimGray,Font=new Font("Consolas",8.5f),Cursor=Cursors.Hand};
+                var price=new Label{Text=item.Current.ToString("0.####"),Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleRight,ForeColor=color,Font=new Font("Consolas",10,FontStyle.Bold),Cursor=Cursors.Hand};
+                card.Controls.Add(name,0,0);card.Controls.Add(percent,1,0);card.Controls.Add(symbol,0,1);card.Controls.Add(price,1,1);
+                var menu=new ContextMenuStrip();menu.Items.Add("查看分时图",null,async(_,_)=>await OpenFuturesChartAsync(item,"分时图"));menu.Items.Add("查看K线图",null,async(_,_)=>await OpenFuturesChartAsync(item,"日K线"));card.ContextMenuStrip=menu;foreach(Control child in card.Controls){child.ContextMenuStrip=menu;strip.EnableDrag(child);}card.Disposed+=(_,_)=>menu.Dispose();strip.EnableDrag(card);strip.Controls.Add(card);
+            }
+            strip.AutoScrollPosition=new Point(Math.Min(scroll,Math.Max(0,strip.DisplayRectangle.Width-strip.ClientSize.Width)),0);
+        }
+        finally{strip.ResumeLayout();}
+    }
+
+    private async Task OpenSelectedFuturesChartAsync(ContextMenuStrip menu,string chartType)
+    {
+        if(menu.SourceControl is not DataGridView grid||grid.CurrentRow?.Tag is not FuturesQuote item)return;
+        await OpenFuturesChartAsync(item,chartType);
+    }
+
+    private async Task OpenFuturesChartAsync(FuturesQuote item,string chartType)
+    {
+        var quote=new StockQuote(item.Symbol,item.Name,item.Current,item.PreviousSettlement,item.Open,item.High,item.Low,item.Volume,0,0,0,0,0,item.QuoteTime);
+        var stock=new StockItem{Code=item.Symbol,DisplayName=item.Name};
+        var form=new StockDetailsForm(stock,quote,[],chartType,(int)Number(_refresh.Text,3),(type,token)=>_futuresService.GetChartAsync(item.Symbol,type,token));form.Show(this);await Task.CompletedTask;
     }
 
     private void ConfigureRankingContextMenu(params DataGridView[] grids)
@@ -475,6 +562,7 @@ public sealed class SettingsForm : Form
         minute.Click+=async(_,_)=>await OpenRankingChartAsync(item.Code,item.Name,"分时图");daily.Click+=async(_,_)=>await OpenRankingChartAsync(item.Code,item.Name,"日K线");
         foreach(Control control in card.Controls)control.ContextMenuStrip=menu;card.ContextMenuStrip=menu;host.ContextMenuStrip=menu;host.Controls.Add(card);
         var tipLines=new List<string>{item.Name};
+        if(!string.IsNullOrWhiteSpace(item.Industry)&&!string.IsNullOrWhiteSpace(item.ThemeType))tipLines.Add($"匹配板块：{item.Industry}（{item.ThemeType}）");
         if(!string.IsNullOrWhiteSpace(item.LimitUpReason))tipLines.Add("涨停原因："+item.LimitUpReason);
         else if(!item.IsPreviousLimitUpFailure)tipLines.Add("涨停原因：暂无数据");
         if(item.IsPreviousLimitUpFailure)
@@ -576,7 +664,7 @@ public sealed class SettingsForm : Form
     private void ChooseBackground(object? s,EventArgs e){using var d=new ColorDialog{Color=_background.BackColor,FullOpen=true};if(d.ShowDialog(this)==DialogResult.OK)_background.BackColor=d.Color;}
     private void ExportConfig(object? s,EventArgs e){ReadControls();using var d=new SaveFileDialog{Filter="盯盘配置 (*.json)|*.json",FileName="StockTickerLite-settings.json"};if(d.ShowDialog(this)==DialogResult.OK)File.WriteAllText(d.FileName,JsonSerializer.Serialize(Result,new JsonSerializerOptions{WriteIndented=true}));}
     private void ImportConfig(object? s,EventArgs e){using var d=new OpenFileDialog{Filter="盯盘配置 (*.json)|*.json"};if(d.ShowDialog(this)!=DialogResult.OK)return;try{var x=JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(d.FileName))!;Result=x;_stocks.Rows.Clear();LoadControls(x);}catch{MessageBox.Show("配置文件无法读取。");}}
-    protected override void OnFormClosed(FormClosedEventArgs e){_searchTimer.Stop();_limitUpResizeTimer.Stop();_limitUpResizeTimer.Dispose();_searchCts?.Cancel();_rankingCts?.Cancel();_rankingCts?.Dispose();_limitUpCts?.Cancel();_limitUpCts?.Dispose();_rankingChartCts?.Cancel();_rankingChartCts?.Dispose();_searchService.Dispose();_rankingService.Dispose();_rankingQuoteService.Dispose();base.OnFormClosed(e);}
+    protected override void OnFormClosed(FormClosedEventArgs e){_searchTimer.Stop();_limitUpResizeTimer.Stop();_futuresTimer.Stop();_limitUpResizeTimer.Dispose();_futuresTimer.Dispose();_searchCts?.Cancel();_rankingCts?.Cancel();_rankingCts?.Dispose();_limitUpCts?.Cancel();_limitUpCts?.Dispose();_rankingChartCts?.Cancel();_rankingChartCts?.Dispose();_futuresCts?.Cancel();_futuresCts?.Dispose();_searchService.Dispose();_rankingService.Dispose();_rankingQuoteService.Dispose();_futuresService.Dispose();base.OnFormClosed(e);}
     private static TabPage Page(string text)=>new(text){Size=new Size(323,263),Padding=new Padding(3)};
     private static GroupBox Box(string text,int x,int y,int w,int h)=>new(){Text=text,Location=new Point(x,y),Size=new Size(w,h)};
     private static Label LabelAt(string text,int x,int y)=>new(){Text=text,Location=new Point(x,y),AutoSize=true};
@@ -600,6 +688,13 @@ public sealed class SettingsForm : Form
         grid.Columns.Add(Column("行业板块"));grid.Columns.Add(Column("板块涨跌",DataGridViewContentAlignment.MiddleRight));grid.Columns.Add(Column("领涨股"));grid.Columns.Add(Column("领涨股涨跌",DataGridViewContentAlignment.MiddleRight));return grid;
         static DataGridViewTextBoxColumn Column(string header,DataGridViewContentAlignment alignment=DataGridViewContentAlignment.MiddleLeft)=>new(){HeaderText=header,AutoSizeMode=DataGridViewAutoSizeColumnMode.Fill,FillWeight=100,MinimumWidth=70,SortMode=DataGridViewColumnSortMode.NotSortable,DefaultCellStyle=new DataGridViewCellStyle{Alignment=alignment}};
     }
+    private static DataGridView FuturesGrid()
+    {
+        var grid=new DataGridView{Dock=DockStyle.Fill,AllowUserToAddRows=false,AllowUserToDeleteRows=false,AllowUserToResizeRows=false,AutoGenerateColumns=false,ReadOnly=true,RowHeadersVisible=false,MultiSelect=false,SelectionMode=DataGridViewSelectionMode.FullRowSelect,BackgroundColor=SystemColors.Window,BorderStyle=BorderStyle.Fixed3D};
+        grid.Columns.Add(new DataGridViewTextBoxColumn{HeaderText="排名",Width=48,AutoSizeMode=DataGridViewAutoSizeColumnMode.None,SortMode=DataGridViewColumnSortMode.NotSortable,DefaultCellStyle=new DataGridViewCellStyle{Alignment=DataGridViewContentAlignment.MiddleCenter}});
+        foreach(var column in new[]{("合约","Left"),("名称","Left"),("最新价","Right"),("涨跌额","Right"),("涨跌幅","Right"),("成交量","Right"),("持仓量","Right"),("时间","Center")})grid.Columns.Add(new DataGridViewTextBoxColumn{HeaderText=column.Item1,AutoSizeMode=DataGridViewAutoSizeColumnMode.Fill,FillWeight=column.Item1=="名称"?125:100,MinimumWidth=58,SortMode=DataGridViewColumnSortMode.NotSortable,DefaultCellStyle=new DataGridViewCellStyle{Alignment=column.Item2=="Right"?DataGridViewContentAlignment.MiddleRight:column.Item2=="Center"?DataGridViewContentAlignment.MiddleCenter:DataGridViewContentAlignment.MiddleLeft}});
+        return grid;
+    }
     private static void Place(Control c,int x,int y,int w,int h){c.Location=new Point(x,y);c.Size=new Size(w,h);}
     private static void Select(ComboBox c,int i)=>c.SelectedIndex=Math.Clamp(i,0,c.Items.Count-1);
     private static decimal Number(string s,decimal fallback)=>decimal.TryParse(new string(s.Where(x=>char.IsDigit(x)||x=='.').ToArray()),out var n)?n:fallback;
@@ -621,6 +716,18 @@ public sealed class SettingsForm : Form
             path.AddPolygon([new Point(p,p-t),new Point(p-t,p),new Point(Width-p,Height-p+t),new Point(Width-p+t,Height-p)]);
             path.AddPolygon([new Point(Width-p,p-t),new Point(Width-p+t,p),new Point(p,Height-p+t),new Point(p-t,Height-p)]);
             var old=Region;Region=new Region(path);old?.Dispose();
+        }
+    }
+
+    private sealed class HorizontalFlowPanel:FlowLayoutPanel
+    {
+        private bool _dragging;private Point _dragStart;private int _scrollStart;
+        public HorizontalFlowPanel(){Dock=DockStyle.Fill;AutoScroll=true;FlowDirection=FlowDirection.LeftToRight;WrapContents=false;BackColor=Color.FromArgb(248,248,248);Padding=new Padding(3,2,3,22);Margin=Padding.Empty;EnableDrag(this);}
+        public void EnableDrag(Control control)
+        {
+            control.MouseDown+=(s,e)=>{if(e.Button!=MouseButtons.Left)return;_dragging=true;_dragStart=control.PointToScreen(e.Location);_scrollStart=Math.Abs(AutoScrollPosition.X);control.Capture=true;};
+            control.MouseMove+=(s,e)=>{if(!_dragging||e.Button!=MouseButtons.Left)return;var current=control.PointToScreen(e.Location);var target=Math.Clamp(_scrollStart- (current.X-_dragStart.X),0,Math.Max(0,DisplayRectangle.Width-ClientSize.Width));AutoScrollPosition=new Point(target,0);};
+            control.MouseUp+=(s,e)=>{if(e.Button!=MouseButtons.Left)return;_dragging=false;control.Capture=false;};
         }
     }
 }
