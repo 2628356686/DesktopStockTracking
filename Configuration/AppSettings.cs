@@ -31,6 +31,11 @@ public sealed class AppSettings
     public bool MonitorDragonTiger { get; set; }
     public bool MonitorSevereAbnormal { get; set; }
     public bool MonitorSealAbnormal { get; set; }
+    public bool ShowRankingPage { get; set; } = true;
+    public bool ShowLimitUpLadderPage { get; set; } = true;
+    public bool ShowFuturesPage { get; set; } = true;
+    public bool ShowChartPage { get; set; } = true;
+    public bool ShowMonitorPage { get; set; } = true;
     public bool AlignText { get; set; } = true;
     public bool EnableBalloonAlert { get; set; } = true;
     public bool EnableSoundAlert { get; set; }

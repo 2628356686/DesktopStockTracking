@@ -70,6 +70,9 @@ public sealed class MainForm : Form
     private readonly Dictionary<string,decimal> _industryChanges=new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string,List<(DateTime Time,long Volume)>> _sealVolumeHistory=new(StringComparer.OrdinalIgnoreCase); private readonly Dictionary<string,(decimal Drop,DateTime Expires)> _sealAbnormal=new(StringComparer.OrdinalIgnoreCase);
     private AppSettings _settings; private CancellationTokenSource? _cts; private bool _refreshing; private Point _dragOrigin; private Font? _rowFont; private bool _rowsNeedRebuild=true; private DateTime _monitoringUpdated=DateTime.MinValue; private TimeSpan _monitoringRefreshInterval=TimeSpan.FromMinutes(10);
+    private bool DragonTigerMonitorEnabled=>_settings.ShowMonitorPage&&_settings.MonitorDragonTiger;
+    private bool SevereAbnormalMonitorEnabled=>_settings.ShowMonitorPage&&_settings.MonitorSevereAbnormal;
+    private bool SealAbnormalMonitorEnabled=>_settings.ShowMonitorPage&&_settings.MonitorSealAbnormal;
 
     public MainForm()
     {
@@ -164,9 +167,9 @@ public sealed class MainForm : Form
         if(_settings.PriceDisplayMode!=1){var price=q.Current.ToString("0.00");if(_settings.PriceDisplayMode==2)price+=FormatSigned(q.Change,"+","-");parts.Add(price);}
         if(_settings.ChangeDisplayMode!=2)parts.Add(FormatSigned(q.ChangePercent,"+","-")+"%");
         if(_settings.ShowSealVolume&&q.SealedVolume>0)parts.Add("封"+FormatSealVolume(q.SealedVolume));
-        if(_settings.MonitorSealAbnormal&&_sealAbnormal.TryGetValue(stock.NormalizedCode,out var sealEvent)&&sealEvent.Expires>DateTime.Now)parts.Add($"封板异动10秒降{sealEvent.Drop:0.##}%");
-        if((_settings.MonitorDragonTiger||_settings.MonitorSevereAbnormal)&&_monitoringInline.TryGetValue(stock.NormalizedCode,out var monitoringText)&&monitoringText.Length>0)parts.Add(monitoringText);
-        if(_settings.MonitorDragonTiger)
+        if(SealAbnormalMonitorEnabled&&_sealAbnormal.TryGetValue(stock.NormalizedCode,out var sealEvent)&&sealEvent.Expires>DateTime.Now)parts.Add($"封板异动10秒降{sealEvent.Drop:0.##}%");
+        if((DragonTigerMonitorEnabled||SevereAbnormalMonitorEnabled)&&_monitoringInline.TryGetValue(stock.NormalizedCode,out var monitoringText)&&monitoringText.Length>0)parts.Add(monitoringText);
+        if(DragonTigerMonitorEnabled)
         {
             var turnoverText=AbnormalMovementMonitor.BuildTurnoverInlineStatus(stock.NormalizedCode,q);
             if(turnoverText.Length>0)parts.Add(turnoverText);
@@ -178,7 +181,7 @@ public sealed class MainForm : Form
         label.IndustryText=industryText;
         label.IndustryForeColor=industryChange is{}change&&_settings.ChangeDisplayMode is 0 or 3?change>0?Color.FromArgb(_settings.RiseColorArgb):change<0?Color.FromArgb(_settings.FallColorArgb):Color.FromArgb(_settings.FlatColorArgb):label.ForeColor;
         var tips=new List<string>();var monitoringTip=_monitoringSummary.GetValueOrDefault(stock.NormalizedCode,string.Empty);
-        if(_settings.MonitorDragonTiger)
+        if(DragonTigerMonitorEnabled)
         {
             var turnoverLine=AbnormalMovementMonitor.BuildTurnoverSummaryLine(stock.NormalizedCode,q);
             if(turnoverLine.Length>0)
@@ -190,7 +193,7 @@ public sealed class MainForm : Form
             }
         }
         if(monitoringTip.Length>0)tips.Add(monitoringTip);
-        if(_settings.MonitorSealAbnormal&&_sealAbnormal.TryGetValue(stock.NormalizedCode,out sealEvent)&&sealEvent.Expires>DateTime.Now)
+        if(SealAbnormalMonitorEnabled&&_sealAbnormal.TryGetValue(stock.NormalizedCode,out sealEvent)&&sealEvent.Expires>DateTime.Now)
         {
             if(tips.Count==0)tips.Add(sourceName);
             tips.Add($"封板异动：10秒内封单量下降 {sealEvent.Drop:0.00}%（阈值30%）");
@@ -210,8 +213,8 @@ public sealed class MainForm : Form
         try
         {
             var quoteCodes=_settings.Stocks.Select(x=>x.Code).ToList();
-            if(_settings.MonitorDragonTiger||_settings.MonitorSevereAbnormal)quoteCodes.AddRange(_settings.Stocks.Where(x=>!AbnormalMovementMonitor.IsIndex(x.Code)).Select(x=>AbnormalMovementMonitor.BenchmarkCode(x.Code)));
-            var includeExtendedInfo=_settings.MonitorDragonTiger||_settings.ShowIndustryComparison;
+            if(DragonTigerMonitorEnabled||SevereAbnormalMonitorEnabled)quoteCodes.AddRange(_settings.Stocks.Where(x=>!AbnormalMovementMonitor.IsIndex(x.Code)).Select(x=>AbnormalMovementMonitor.BenchmarkCode(x.Code)));
+            var includeExtendedInfo=DragonTigerMonitorEnabled||_settings.ShowIndustryComparison;
             var data=await _quotes.GetQuotesAsync(quoteCodes.Distinct(StringComparer.OrdinalIgnoreCase),_cts.Token,includeExtendedInfo);foreach(var pair in data){_latest[pair.Key]=pair.Value;if(pair.Value.IsPreMarketFallback)continue;if(!_history.TryGetValue(pair.Key,out var h)){h=[];_history[pair.Key]=h;}if(h.Count==0||h[^1].Price!=pair.Value.Current){h.Add((DateTime.Now,pair.Value.Current));if(h.Count>600)h.RemoveAt(0);}if(!AbnormalMovementMonitor.IsIndex(pair.Key))UpdateSealAbnormal(pair.Key,pair.Value);}
             foreach(var stock in _settings.Stocks)if(_latest.TryGetValue(stock.NormalizedCode,out var q)&&!q.IsPreMarketFallback)CheckAlert(stock,q);await RefreshIndustryComparisonAsync(_cts.Token);await RefreshMonitoringAsync(_cts.Token);Render();var latest=data.Values.Where(x=>x.QuoteTime.HasValue).Select(x=>x.QuoteTime!.Value).DefaultIfEmpty(DateTime.Now).Max();_status.Text=$"{latest:HH:mm:ss} · {_settings.RefreshSeconds}s";
         }
@@ -227,7 +230,7 @@ public sealed class MainForm : Form
 
     private void UpdateSealAbnormal(string code,StockQuote quote)
     {
-        if(!_settings.MonitorSealAbnormal)
+        if(!SealAbnormalMonitorEnabled)
         {
             _sealVolumeHistory.Clear();_sealAbnormal.Clear();return;
         }
@@ -250,7 +253,7 @@ public sealed class MainForm : Form
 
     private async Task RefreshMonitoringAsync(CancellationToken cancellationToken)
     {
-        if(!_settings.MonitorDragonTiger&&!_settings.MonitorSevereAbnormal){_monitoringSummary.Clear();_monitoringInline.Clear();return;}
+        if(!DragonTigerMonitorEnabled&&!SevereAbnormalMonitorEnabled){_monitoringSummary.Clear();_monitoringInline.Clear();return;}
         if(DateTime.Now-_monitoringUpdated<_monitoringRefreshInterval&&_settings.Stocks.All(x=>AbnormalMovementMonitor.IsIndex(x.Code)||_monitoringSummary.ContainsKey(x.NormalizedCode)))return;
         var stocks=_settings.Stocks.Where(x=>!AbnormalMovementMonitor.IsIndex(x.Code)&&_latest.ContainsKey(x.NormalizedCode)).ToList();
         var codes=stocks.Select(x=>x.NormalizedCode).Concat(stocks.Select(x=>AbnormalMovementMonitor.BenchmarkCode(x.Code))).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
@@ -270,10 +273,10 @@ public sealed class MainForm : Form
             daily.TryGetValue(code,out var stockPoints);daily.TryGetValue(benchmarkCode,out var benchmarkPoints);
             stockPoints=WithLiveDailyPoint(stockPoints??[],quote);
             if(_latest.TryGetValue(benchmarkCode,out var benchmarkQuote)&&!benchmarkQuote.IsPreMarketFallback)benchmarkPoints=WithLiveDailyPoint(benchmarkPoints??[],benchmarkQuote);
-            _monitoringSummary[code]=AbnormalMovementMonitor.BuildSummary(code,stock.DisplayName,quote,stockPoints??[],benchmarkPoints??[],_settings.MonitorDragonTiger,_settings.MonitorSevereAbnormal);
+            _monitoringSummary[code]=AbnormalMovementMonitor.BuildSummary(code,stock.DisplayName,quote,stockPoints??[],benchmarkPoints??[],DragonTigerMonitorEnabled,SevereAbnormalMonitorEnabled);
             var inlineParts=new List<string>();
-            if(_settings.MonitorDragonTiger)inlineParts.Add(AbnormalMovementMonitor.BuildDragonTigerInlineStatus(code,quote,stockPoints??[],benchmarkPoints??[]));
-            if(_settings.MonitorSevereAbnormal)
+            if(DragonTigerMonitorEnabled)inlineParts.Add(AbnormalMovementMonitor.BuildDragonTigerInlineStatus(code,quote,stockPoints??[],benchmarkPoints??[]));
+            if(SevereAbnormalMonitorEnabled)
             {
                 inlineParts.Add(AbnormalMovementMonitor.BuildInlineStatus(code,stockPoints??[],benchmarkPoints??[]));
                 var distance=AbnormalMovementMonitor.GetSevereThresholdDistance(code,stockPoints??[],benchmarkPoints??[]);

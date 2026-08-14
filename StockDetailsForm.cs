@@ -12,7 +12,9 @@ public sealed class StockDetailsForm : Form
     private readonly SinaChartService _charts=new();
     private readonly System.Windows.Forms.Timer _refreshTimer=new();
     private readonly string _code;
-    private readonly string _chartType;
+    private string _chartType;
+    private readonly ComboBox _chartSelector=new(){DropDownStyle=ComboBoxStyle.DropDownList,Width=128};
+    private readonly int _intradayRefreshSeconds;
     private CancellationTokenSource? _cts;
     private bool _refreshing;
     private bool _hasData;
@@ -21,14 +23,17 @@ public sealed class StockDetailsForm : Form
 
     public StockDetailsForm(StockItem stock,StockQuote quote,IReadOnlyList<(DateTime Time,decimal Price)> history,string chartType,int refreshSeconds,Func<string,CancellationToken,Task<IReadOnlyList<IntradayPoint>>>? customChartLoader=null)
     {
-        _code=customChartLoader is null?stock.NormalizedCode:stock.Code;_chartType=chartType;_latestQuote=quote;_customChartLoader=customChartLoader;
+        _code=customChartLoader is null?stock.NormalizedCode:stock.Code;_chartType=chartType;_latestQuote=quote;_customChartLoader=customChartLoader;_intradayRefreshSeconds=Math.Clamp(refreshSeconds,1,10);
         Text="当日分时图";StartPosition=FormStartPosition.CenterParent;Size=new Size(760,540);MinimumSize=new Size(500,360);Font=new Font("Microsoft YaHei UI",9);
         var top=new Panel{Dock=DockStyle.Top,Height=125,Padding=new Padding(18,14,18,6)};var name=string.IsNullOrWhiteSpace(stock.DisplayName)?quote.Name:stock.DisplayName;
         _title.Text=$"{name}  {quote.Code}";_title.ForeColor=Color.Black;
         _details.Text=FormatLatestDetails();_details.ForeColor=ChangeColor(_latestQuote.Change);
         _canvas.HoverPointChanged+=ShowHoverDetails;
-        _title.Location=new Point(18,12);_details.Location=new Point(18,48);top.Controls.Add(_title);top.Controls.Add(_details);_canvas.SetLoading(quote.PreviousClose);Controls.Add(_canvas);Controls.Add(top);
-        _refreshTimer.Interval=chartType=="分时图"?Math.Clamp(refreshSeconds,1,10)*1000:60000;
+        _title.Location=new Point(18,12);_details.Location=new Point(18,48);
+        _chartSelector.Items.AddRange(["分时图","日K线","周K线","月K线","5分钟","15分钟","30分钟","60分钟"]);_chartSelector.SelectedItem=_chartSelector.Items.Cast<string>().Contains(chartType)?chartType:"分时图";_chartType=_chartSelector.Text;_chartSelector.Location=new Point(top.ClientSize.Width-_chartSelector.Width-18,14);_chartSelector.Anchor=AnchorStyles.Top|AnchorStyles.Right;
+        top.Controls.Add(_title);top.Controls.Add(_details);top.Controls.Add(_chartSelector);_canvas.SetLoading(quote.PreviousClose);Controls.Add(_canvas);Controls.Add(top);
+        _chartSelector.SelectedIndexChanged+=async(_,_)=>{if(string.IsNullOrWhiteSpace(_chartSelector.Text)||_chartType==_chartSelector.Text)return;_chartType=_chartSelector.Text;_refreshTimer.Interval=RefreshInterval();_canvas.SetLoading(_latestQuote.PreviousClose);await RefreshChartAsync(true);};
+        _refreshTimer.Interval=RefreshInterval();
         _refreshTimer.Tick+=async (_,_)=>await RefreshChartAsync();
         Shown+=async (_,_)=>{await RefreshChartAsync();if(!IsDisposed)_refreshTimer.Start();};
     }
@@ -44,20 +49,21 @@ public sealed class StockDetailsForm : Form
         var dateLabel=_chartType=="分时图"?$"{point.Time:yyyy-MM-dd HH:mm}":$"{point.Time:yyyy-MM-dd}";
         _details.Text=$"{dateLabel}    收盘 {point.Price,8:0.00}    涨跌 {change,9:+0.00;-0.00;0.00}    涨幅 {percent,8:+0.00;-0.00;0.00}%\r\n"+$"开盘 {point.Open,10:0.00}    最高 {point.High,9:0.00}    最低 {point.Low,10:0.00}\r\n"+$"昨收 {previous,10:0.00}    成交量 {point.Volume/10000d,7:0.00}万    成交额 {point.Amount/100000000m,7:0.00}亿";
     }
+    private int RefreshInterval()=>_chartType=="分时图"?_intradayRefreshSeconds*1000:60000;
     private static Color ChangeColor(decimal change)=>change>0?Color.FromArgb(210,35,35):change<0?Color.FromArgb(0,135,65):Color.FromArgb(45,45,45);
 
-    private async Task RefreshChartAsync()
+    private async Task RefreshChartAsync(bool force=false)
     {
-        if(_refreshing||IsDisposed)return;_refreshing=true;
-        _cts?.Cancel();_cts?.Dispose();_cts=new CancellationTokenSource();
+        if((_refreshing&&!force)||IsDisposed)return;
+        _cts?.Cancel();_cts?.Dispose();var cts=new CancellationTokenSource();_cts=cts;_refreshing=true;var requestedChartType=_chartType;
         try
         {
-            var data=_customChartLoader is null?await _charts.GetChartAsync(_code,_chartType,_cts.Token):await _customChartLoader(_chartType,_cts.Token);
-            if(IsDisposed)return;SetChartData(data,_chartType);_hasData=data.Count>0;
+            var data=_customChartLoader is null?await _charts.GetChartAsync(_code,requestedChartType,cts.Token):await _customChartLoader(requestedChartType,cts.Token);
+            if(IsDisposed||!ReferenceEquals(_cts,cts))return;SetChartData(data,requestedChartType);_hasData=data.Count>0;
         }
         catch(OperationCanceledException){}
-        catch(Exception ex){if(!IsDisposed&&!_hasData)SetChartError("行情加载失败："+ex.Message);}
-        finally{_refreshing=false;}
+        catch(Exception ex){if(!IsDisposed&&ReferenceEquals(_cts,cts)&&!_hasData)SetChartError("行情加载失败："+ex.Message);}
+        finally{if(ReferenceEquals(_cts,cts))_refreshing=false;}
     }
 
     protected override void OnFormClosed(FormClosedEventArgs e)

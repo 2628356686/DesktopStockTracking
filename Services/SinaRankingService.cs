@@ -81,25 +81,28 @@ public sealed class SinaRankingService : IDisposable
 
     private static decimal ParseDecimal(string value)=>decimal.TryParse(value,NumberStyles.Float,CultureInfo.InvariantCulture,out var number)?number:0;
 
-    public async Task<IReadOnlyList<LimitUpLadderItem>> GetLimitUpLadderAsync(CancellationToken cancellationToken)
+    public Task<IReadOnlyList<LimitUpLadderItem>> GetLimitUpLadderAsync(CancellationToken cancellationToken)=>GetLimitUpLadderAsync(DateTime.Today,cancellationToken);
+
+    public async Task<IReadOnlyList<LimitUpLadderItem>> GetLimitUpLadderAsync(DateTime tradingDate,CancellationToken cancellationToken)
     {
-        var now=DateTime.Now;
-        var date=now.ToString("yyyyMMdd",CultureInfo.InvariantCulture);
+        tradingDate=tradingDate.Date;var date=tradingDate.ToString("yyyyMMdd",CultureInfo.InvariantCulture);
         var todayTask=GetEastmoneyLimitUpPoolAsync("getTopicZTPool","fbt:asc",date,false,cancellationToken);
         var yesterdayTask=GetEastmoneyLimitUpPoolAsync("getYesterdayZTPool","zs:desc",date,true,cancellationToken);
         var reasonsTask=GetLimitUpReasonsAsync(date,cancellationToken);
-        var previousReasonsTask=GetPreviousTradingDayLimitUpReasonsAsync(now.Date,cancellationToken);
+        var previousReasonsTask=GetPreviousTradingDayLimitUpReasonsAsync(tradingDate,cancellationToken);
         await Task.WhenAll(todayTask,yesterdayTask,reasonsTask,previousReasonsTask);
         var today=await todayTask;
         var yesterday=await yesterdayTask;
         var reasons=await reasonsTask;
         var previousReasons=await previousReasonsTask;
-        try{today=today.Concat(await GetCurrentStLimitUpsAsync(cancellationToken)).GroupBy(x=>x.Code,StringComparer.OrdinalIgnoreCase).Select(x=>x.First()).ToArray();}catch{ /* 普通涨停池仍可使用 */ }
-        try{yesterday=yesterday.Concat(await GetPreviousStLimitUpsAsync(cancellationToken)).GroupBy(x=>x.Code,StringComparer.OrdinalIgnoreCase).Select(x=>x.First()).ToArray();}catch{ /* 普通昨日池仍可使用 */ }
+        if(tradingDate==DateTime.Today)
+        {
+            try{today=today.Concat(await GetCurrentStLimitUpsAsync(cancellationToken)).GroupBy(x=>x.Code,StringComparer.OrdinalIgnoreCase).Select(x=>x.First()).ToArray();}catch{ /* 普通涨停池仍可使用 */ }
+            try{yesterday=yesterday.Concat(await GetPreviousStLimitUpsAsync(cancellationToken)).GroupBy(x=>x.Code,StringComparer.OrdinalIgnoreCase).Select(x=>x.First()).ToArray();}catch{ /* 普通昨日池仍可使用 */ }
+        }
         today=today.Select(item=>reasons.TryGetValue(StockCode.Normalize(item.Code)[2..],out var reason)?item with{LimitUpReason=reason}:item).ToArray();
         yesterday=yesterday.Select(item=>previousReasons.TryGetValue(StockCode.Normalize(item.Code)[2..],out var reason)?item with{LimitUpReason=reason}:item).ToArray();
-        if(yesterday.Count>0)_lastYesterdayLimitUpPool=yesterday;
-        else if(_lastYesterdayLimitUpPool.Count>0)yesterday=_lastYesterdayLimitUpPool;
+        if(tradingDate==DateTime.Today){if(yesterday.Count>0)_lastYesterdayLimitUpPool=yesterday;else if(_lastYesterdayLimitUpPool.Count>0)yesterday=_lastYesterdayLimitUpPool;}
         var yesterdayByCode=yesterday.ToDictionary(x=>x.Code,StringComparer.OrdinalIgnoreCase);
         today=today.Select(x=>yesterdayByCode.TryGetValue(x.Code,out var previous)?x with{PreviousConsecutiveBoards=previous.ConsecutiveBoards}:x).ToArray();
         var todayCodes=today.Select(x=>x.Code).ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -108,6 +111,20 @@ public sealed class SinaRankingService : IDisposable
         try{combined=await EnrichPoolClassificationsAsync(combined,cancellationToken);}catch{ /* 东财行业仍可作为降级分类 */ }
         try{combined=await EnrichPrimaryIndustriesAsync(combined,cancellationToken);}catch{ /* 二级行业仍可用于降级统计 */ }
         return combined.OrderByDescending(x=>x.ConsecutiveBoards).ThenBy(x=>x.IsPreviousLimitUpFailure).ThenBy(x=>x.SealTime??DateTime.MaxValue).ToArray();
+    }
+
+    public async Task<DateTime?> FindLimitUpTradingDayAsync(DateTime start,int direction,CancellationToken cancellationToken)
+    {
+        direction=direction<0?-1:1;var candidate=start.Date;
+        for(var i=0;i<20;i++)
+        {
+            candidate=candidate.AddDays(direction);
+            if(candidate>DateTime.Today)return null;
+            if(candidate.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)continue;
+            var date=candidate.ToString("yyyyMMdd",CultureInfo.InvariantCulture);
+            if((await GetEastmoneyLimitUpPoolAsync("getTopicZTPool","fbt:asc",date,false,cancellationToken)).Count>0)return candidate;
+        }
+        return null;
     }
 
     private async Task<IReadOnlyDictionary<string,string>> GetLimitUpReasonsAsync(string date,CancellationToken cancellationToken)
@@ -303,15 +320,15 @@ public sealed class SinaRankingService : IDisposable
             var boards=(int)Number(item,yesterday?"ylbc":"lbc");if(boards<1)boards=1;
             var time=(int)Number(item,yesterday?"yfbt":"lbt");
             var industry=Text(item,"hybk");
-            result.Add(new LimitUpLadderItem(code,Text(item,"n"),industry,Number(item,"zdp"),boards,yesterday?0:(int)Number(item,"zbc"),ParsePoolTime(time),IndustryBoard:industry));
+            result.Add(new LimitUpLadderItem(code,Text(item,"n"),industry,Number(item,"zdp"),boards,yesterday?0:(int)Number(item,"zbc"),ParsePoolTime(time,date),IndustryBoard:industry));
         }
         return result;
     }
 
-    private static DateTime? ParsePoolTime(int value)
+    private static DateTime? ParsePoolTime(int value,string date)
     {
         if(value<=0)return null;var text=value.ToString("D6",CultureInfo.InvariantCulture);
-        return DateTime.TryParseExact(DateTime.Now.ToString("yyyyMMdd",CultureInfo.InvariantCulture)+text,"yyyyMMddHHmmss",CultureInfo.InvariantCulture,DateTimeStyles.None,out var time)?time:null;
+        return DateTime.TryParseExact(date+text,"yyyyMMddHHmmss",CultureInfo.InvariantCulture,DateTimeStyles.None,out var time)?time:null;
     }
 
     private static string NormalizeConcept(string value)
