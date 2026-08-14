@@ -1,5 +1,7 @@
 # 轻量桌面盯盘
 
+![DesktopStockTracking 功能宣传图](Assets/Promotion/DesktopStockTracking-promo-long.png)
+
 一款用于关注沪深北市场股票和指数的 Windows 桌面行情工具。
 
 ## v1.3.0 更新说明
