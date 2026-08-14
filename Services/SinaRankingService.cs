@@ -8,6 +8,7 @@ namespace StockTickerLite.Services;
 
 public sealed record StockRankingItem(string Code, string Name, string Industry, decimal ChangePercent, decimal Metric);
 public sealed record IndustryRankingItem(string Code,string Name,decimal ChangePercent,string LeadingStock,decimal LeadingStockChangePercent);
+public sealed record SectorChangeItem(string Name,string Type,decimal ChangePercent);
 public sealed record LimitUpLadderItem(string Code,string Name,string Industry,decimal ChangePercent,int ConsecutiveBoards,int BreakCount,DateTime? SealTime,bool IsPreviousLimitUpFailure=false,int PreviousConsecutiveBoards=0,string IndustryBoard="",string PrimaryIndustry="",string LimitUpReason="",string ThemeType="");
 internal sealed record ThsStockClassification(string Industry,IReadOnlyList<string> Concepts);
 
@@ -111,6 +112,16 @@ public sealed class SinaRankingService : IDisposable
         try{combined=await EnrichPoolClassificationsAsync(combined,cancellationToken);}catch{ /* 东财行业仍可作为降级分类 */ }
         try{combined=await EnrichPrimaryIndustriesAsync(combined,cancellationToken);}catch{ /* 二级行业仍可用于降级统计 */ }
         return combined.OrderByDescending(x=>x.ConsecutiveBoards).ThenBy(x=>x.IsPreviousLimitUpFailure).ThenBy(x=>x.SealTime??DateTime.MaxValue).ToArray();
+    }
+
+    public async Task<IReadOnlyList<SectorChangeItem>> GetSectorChangesAsync(CancellationToken cancellationToken)
+    {
+        const string industryUrl="https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=500&po=1&np=1&fltt=2&invt=2&fid=f3&fs=m%3A90%2Bt%3A2%2Bf%3A!50&fields=f3%2Cf12%2Cf14";
+        const string conceptUrl="https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=1000&po=1&np=1&fltt=2&invt=2&fid=f3&fs=m%3A90%2Bt%3A3%2Bf%3A!50&fields=f3%2Cf12%2Cf14";
+        var industryTask=GetEastmoneyListAsync(industryUrl,cancellationToken);var conceptTask=GetEastmoneyListAsync(conceptUrl,cancellationToken);await Task.WhenAll(industryTask,conceptTask);
+        return (await industryTask).Select(x=>new SectorChangeItem(Text(x,"f14"),"行业",Number(x,"f3")))
+            .Concat((await conceptTask).Select(x=>new SectorChangeItem(Text(x,"f14"),"概念",Number(x,"f3"))))
+            .Where(x=>x.Name.Length>0).GroupBy(x=>(x.Name,x.Type)).Select(x=>x.First()).ToArray();
     }
 
     public async Task<DateTime?> FindLimitUpTradingDayAsync(DateTime start,int direction,CancellationToken cancellationToken)

@@ -10,6 +10,7 @@ public sealed class StockDetailsForm : Form
     private readonly Label _details=new(){AutoSize=true,Font=new Font("Consolas",10)};
     private readonly PriceCanvas _canvas=new(){Dock=DockStyle.Fill};
     private readonly SinaChartService _charts=new();
+    private readonly SinaQuoteService _quotes=new();
     private readonly System.Windows.Forms.Timer _refreshTimer=new();
     private readonly string _code;
     private string _chartType;
@@ -18,7 +19,7 @@ public sealed class StockDetailsForm : Form
     private CancellationTokenSource? _cts;
     private bool _refreshing;
     private bool _hasData;
-    private readonly StockQuote _latestQuote;
+    private StockQuote _latestQuote;
     private readonly Func<string,CancellationToken,Task<IReadOnlyList<IntradayPoint>>>? _customChartLoader;
 
     public StockDetailsForm(StockItem stock,StockQuote quote,IReadOnlyList<(DateTime Time,decimal Price)> history,string chartType,int refreshSeconds,Func<string,CancellationToken,Task<IReadOnlyList<IntradayPoint>>>? customChartLoader=null)
@@ -59,6 +60,15 @@ public sealed class StockDetailsForm : Form
         try
         {
             var data=_customChartLoader is null?await _charts.GetChartAsync(_code,requestedChartType,cts.Token):await _customChartLoader(requestedChartType,cts.Token);
+            if(requestedChartType=="日K线")
+            {
+                if(_customChartLoader is null)
+                {
+                    var quotes=await _quotes.GetQuotesAsync([_code],cts.Token);
+                    if(quotes.TryGetValue(StockCode.Normalize(_code),out var liveQuote)&&!liveQuote.IsPreMarketFallback)_latestQuote=liveQuote;
+                }
+                data=WithLiveDailyPoint(data,_latestQuote);
+            }
             if(IsDisposed||!ReferenceEquals(_cts,cts))return;SetChartData(data,requestedChartType);_hasData=data.Count>0;
         }
         catch(OperationCanceledException){}
@@ -66,9 +76,24 @@ public sealed class StockDetailsForm : Form
         finally{if(ReferenceEquals(_cts,cts))_refreshing=false;}
     }
 
+    private static IReadOnlyList<IntradayPoint> WithLiveDailyPoint(IReadOnlyList<IntradayPoint> source,StockQuote quote)
+    {
+        if(quote.Current<=0||quote.IsPreMarketFallback)return source;
+        var date=(quote.QuoteTime??DateTime.Now).Date;
+        var values=source.Where(x=>x.Time.Date!=date).Select(x=>(x.Time,x.Open,x.High,x.Low,x.Price,x.Volume,x.Amount)).ToList();
+        values.Add((date,quote.Open,quote.High,quote.Low,quote.Current,quote.Volume,quote.Amount));values=values.OrderBy(x=>x.Time).ToList();
+        var result=new List<IntradayPoint>(values.Count);
+        for(var i=0;i<values.Count;i++)
+        {
+            var x=values[i];result.Add(new IntradayPoint(x.Time,x.Open,x.High,x.Low,x.Price,x.Volume,x.Amount,x.Price,Ma(i,5),Ma(i,10),Ma(i,20),Ma(i,30),Ma(i,60),Ma(i,120)));
+        }
+        return result;
+        decimal? Ma(int index,int period){if(index+1<period)return null;decimal sum=0;for(var j=index-period+1;j<=index;j++)sum+=values[j].Price;return sum/period;}
+    }
+
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
-        _refreshTimer.Stop();_cts?.Cancel();_cts?.Dispose();_refreshTimer.Dispose();_charts.Dispose();base.OnFormClosed(e);
+        _refreshTimer.Stop();_cts?.Cancel();_cts?.Dispose();_refreshTimer.Dispose();_charts.Dispose();_quotes.Dispose();base.OnFormClosed(e);
     }
 
     private sealed class PriceCanvas:Control

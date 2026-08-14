@@ -34,7 +34,7 @@ public sealed class SettingsForm : Form
     private readonly CheckBox _quickChart = new() { Text = "显示快速切换列表", AutoSize = true };
     private readonly CheckBox _advancedChart = new() { Text = "高级筛选", AutoSize = true };
     private readonly Label _sample = new() { Text = "sh600000  浦发银行  10.00  +1.20%", TextAlign = ContentAlignment.MiddleCenter };
-    private readonly ComboBox _fontSize = Combo("9", "10", "11", "12", "13", "14", "16", "18", "20");
+    private readonly ComboBox _fontSize = Combo("6", "7", "8", "9", "10", "11", "12", "13", "14", "16", "18", "20");
     private readonly ComboBox _spacing = Combo("无", "极窄", "窄", "中等", "较宽", "宽");
     private readonly ComboBox _opacity = Combo("100%", "90%", "80%", "70%", "60%", "50%", "40%", "30%", "20%");
     private readonly ComboBox _refresh = Combo("1s", "2s", "3s", "4s", "5s", "6s", "7s", "8s", "9s", "10s");
@@ -90,7 +90,9 @@ public sealed class SettingsForm : Form
     private readonly Button _refreshFutures=new(){Text="刷新期货",AutoSize=true,UseVisualStyleBackColor=true};
     private readonly System.Windows.Forms.Timer _futuresTimer=new(){Interval=5000};
     private readonly Dictionary<string,decimal> _futuresMa10=new(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlyList<SectorChangeItem> _futuresSectorChanges=[];
     private DateTime _futuresMa10Updated=DateTime.MinValue;
+    private DateTime _futuresSectorChangesUpdated=DateTime.MinValue;
     private readonly ToolTip _tips = new();
 
     [Browsable(false)]
@@ -243,7 +245,10 @@ public sealed class SettingsForm : Form
         if(!_refreshFutures.Enabled)return;_futuresCts?.Cancel();_futuresCts?.Dispose();_futuresCts=new CancellationTokenSource();var token=_futuresCts.Token;_refreshFutures.Enabled=false;
         try
         {
-            _futuresStatus.Text="正在加载期货实时行情...";var items=await _futuresService.GetQuotesAsync(token);if(token.IsCancellationRequested||IsDisposed)return;
+            var initialLoad=_allFutures.Rows.Count==0;if(initialLoad)_futuresStatus.Text="正在加载期货实时行情...";
+            Task<IReadOnlyList<SectorChangeItem>>? sectorTask=null;if(_futuresSectorChanges.Count==0||DateTime.Now-_futuresSectorChangesUpdated>=TimeSpan.FromMinutes(2))sectorTask=_rankingService.GetSectorChangesAsync(token);
+            var items=await _futuresService.GetQuotesAsync(token);if(token.IsCancellationRequested||IsDisposed)return;
+            if(sectorTask is not null)try{_futuresSectorChanges=await sectorTask;_futuresSectorChangesUpdated=DateTime.Now;}catch(OperationCanceledException){throw;}catch{ /* 保留原有板块缓存或文字映射 */ }
             await RefreshFuturesMa10Async(items,token);if(token.IsCancellationRequested||IsDisposed)return;
             var aboveMa10=items.Where(x=>_futuresMa10.TryGetValue(x.Symbol,out var ma10)&&x.Current>=ma10).OrderByDescending(x=>(x.Current-_futuresMa10[x.Symbol])/_futuresMa10[x.Symbol]).Take(5);
             var belowMa10=items.Where(x=>_futuresMa10.TryGetValue(x.Symbol,out var ma10)&&x.Current<ma10).OrderBy(x=>(x.Current-_futuresMa10[x.Symbol])/_futuresMa10[x.Symbol]).Take(5);
@@ -259,7 +264,7 @@ public sealed class SettingsForm : Form
     {
         var missing=items.Where(x=>!_futuresMa10.ContainsKey(x.Symbol)).ToArray();
         if(missing.Length==0&&DateTime.Now-_futuresMa10Updated<TimeSpan.FromMinutes(10))return;
-        _futuresStatus.Text="正在计算期货10日线...";
+        if(_allFutures.Rows.Count==0)_futuresStatus.Text="正在计算期货10日线...";
         using var gate=new SemaphoreSlim(6);
         await Task.WhenAll(items.Select(async item=>
         {
@@ -278,10 +283,15 @@ public sealed class SettingsForm : Form
 
     private static void FillFuturesGrid(DataGridView grid,IEnumerable<FuturesQuote> source)
     {
-        var firstVisible=grid.Rows.Count>0?grid.FirstDisplayedScrollingRowIndex:-1;var selectedSymbol=grid.CurrentRow?.Tag is FuturesQuote selected?selected.Symbol:null;
+        var values=source.ToArray();var firstVisible=grid.Rows.Count>0?grid.FirstDisplayedScrollingRowIndex:-1;var selectedSymbol=grid.CurrentRow?.Tag is FuturesQuote selected?selected.Symbol:null;
         grid.SuspendLayout();try
         {
-            grid.Rows.Clear();var index=0;foreach(var item in source){var row=grid.Rows.Add(++index,item.Symbol,item.Name,item.Current.ToString("0.####"),item.Change.ToString("+0.####;-0.####;0"),item.ChangePercent.ToString("+0.00;-0.00;0.00")+"%",item.Volume.ToString("N0"),item.Position.ToString("N0"),item.QuoteTime?.ToString("HH:mm:ss")??"--");grid.Rows[row].Tag=item;var color=item.ChangePercent>0?Color.Red:item.ChangePercent<0?Color.FromArgb(0,145,70):Color.Black;grid.Rows[row].Cells[3].Style.ForeColor=color;grid.Rows[row].Cells[4].Style.ForeColor=color;grid.Rows[row].Cells[5].Style.ForeColor=color;}
+            while(grid.Rows.Count<values.Length)grid.Rows.Add();while(grid.Rows.Count>values.Length)grid.Rows.RemoveAt(grid.Rows.Count-1);
+            for(var index=0;index<values.Length;index++)
+            {
+                var item=values[index];var row=grid.Rows[index];var data=new object[]{index+1,item.Symbol,item.Name,item.Current.ToString("0.####"),item.Change.ToString("+0.####;-0.####;0"),item.ChangePercent.ToString("+0.00;-0.00;0.00")+"%",item.Volume.ToString("N0"),item.Position.ToString("N0"),item.QuoteTime?.ToString("HH:mm:ss")??"--"};
+                for(var column=0;column<data.Length;column++)if(!Equals(row.Cells[column].Value,data[column]))row.Cells[column].Value=data[column];row.Tag=item;var color=item.ChangePercent>0?Color.Red:item.ChangePercent<0?Color.FromArgb(0,145,70):Color.Black;row.Cells[3].Style.ForeColor=color;row.Cells[4].Style.ForeColor=color;row.Cells[5].Style.ForeColor=color;
+            }
             if(!string.IsNullOrWhiteSpace(selectedSymbol)){var selectedRow=grid.Rows.Cast<DataGridViewRow>().FirstOrDefault(x=>x.Tag is FuturesQuote quote&&quote.Symbol.Equals(selectedSymbol,StringComparison.OrdinalIgnoreCase));if(selectedRow is not null){selectedRow.Selected=true;grid.CurrentCell=selectedRow.Cells[0];}}
             if(firstVisible>=0&&grid.Rows.Count>0)grid.FirstDisplayedScrollingRowIndex=Math.Min(firstVisible,grid.Rows.Count-1);
         }
@@ -290,23 +300,120 @@ public sealed class SettingsForm : Form
 
     private void FillFuturesStrip(HorizontalFlowPanel strip,IEnumerable<FuturesQuote> source,bool rising)
     {
+        var values=source.ToArray();
+        if(strip.Controls.Count==values.Length&&strip.Controls.Cast<Control>().All(x=>x.Controls.Find("futureName",true).Length>0))
+        {
+            for(var i=0;i<values.Length;i++)UpdateCard(strip.Controls[i],values[i]);return;
+        }
         var scroll=Math.Abs(strip.AutoScrollPosition.X);strip.SuspendLayout();try
         {
-            strip.Controls.Clear();foreach(var item in source)
+            strip.Controls.Clear();foreach(var item in values)
             {
                 var color=rising?Color.FromArgb(205,42,42):Color.FromArgb(0,132,67);var background=rising?Color.FromArgb(255,245,245):Color.FromArgb(242,252,247);
-                var card=new TableLayoutPanel{Width=210,Height=76,Margin=new Padding(5,6,5,6),Padding=new Padding(8,6,8,6),BackColor=background,CellBorderStyle=TableLayoutPanelCellBorderStyle.Single,ColumnCount=2,RowCount=2,Cursor=Cursors.Hand};
+                var card=new TableLayoutPanel{Width=210,Height=76,Margin=new Padding(5,6,5,6),Padding=new Padding(8,6,8,6),BackColor=background,CellBorderStyle=TableLayoutPanelCellBorderStyle.Single,ColumnCount=2,RowCount=2,Cursor=Cursors.Hand,Tag=item};
                 card.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,68));card.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,32));card.RowStyles.Add(new RowStyle(SizeType.Percent,52));card.RowStyles.Add(new RowStyle(SizeType.Percent,48));
-                var name=new Label{Text=item.Name,Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleLeft,ForeColor=Color.FromArgb(45,45,45),Font=new Font("宋体",10,FontStyle.Bold),AutoEllipsis=true,Cursor=Cursors.Hand};
-                var percent=new Label{Text=item.ChangePercent.ToString("+0.00;-0.00;0.00")+"%",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleRight,ForeColor=color,Font=new Font("Consolas",10,FontStyle.Bold),Cursor=Cursors.Hand};
-                var symbol=new Label{Text=item.Symbol,Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleLeft,ForeColor=Color.DimGray,Font=new Font("Consolas",8.5f),Cursor=Cursors.Hand};
-                var price=new Label{Text=item.Current.ToString("0.####"),Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleRight,ForeColor=color,Font=new Font("Consolas",10,FontStyle.Bold),Cursor=Cursors.Hand};
+                var name=new Label{Name="futureName",Text=item.Name,Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleLeft,ForeColor=Color.FromArgb(45,45,45),Font=new Font("宋体",10,FontStyle.Bold),AutoEllipsis=true,Cursor=Cursors.Hand};
+                var percent=new Label{Name="futurePercent",Text=item.ChangePercent.ToString("+0.00;-0.00;0.00")+"%",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleRight,ForeColor=color,Font=new Font("Consolas",10,FontStyle.Bold),Cursor=Cursors.Hand};
+                var symbol=new Label{Name="futureSymbol",Text=item.Symbol,Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleLeft,ForeColor=Color.DimGray,Font=new Font("Consolas",8.5f),Cursor=Cursors.Hand};
+                var price=new Label{Name="futurePrice",Text=item.Current.ToString("0.####"),Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleRight,ForeColor=color,Font=new Font("Consolas",10,FontStyle.Bold),Cursor=Cursors.Hand};
                 card.Controls.Add(name,0,0);card.Controls.Add(percent,1,0);card.Controls.Add(symbol,0,1);card.Controls.Add(price,1,1);
-                var menu=new ContextMenuStrip();menu.Items.Add("查看分时图",null,async(_,_)=>await OpenFuturesChartAsync(item,"分时图"));menu.Items.Add("查看K线图",null,async(_,_)=>await OpenFuturesChartAsync(item,"日K线"));card.ContextMenuStrip=menu;foreach(Control child in card.Controls){child.ContextMenuStrip=menu;strip.EnableDrag(child);}card.Disposed+=(_,_)=>menu.Dispose();strip.EnableDrag(card);strip.Controls.Add(card);
+                UpdateCard(card,item);var menu=new ContextMenuStrip();menu.Items.Add("查看分时图",null,async(_,_)=>{if(card.Tag is FuturesQuote current)await OpenFuturesChartAsync(current,"分时图");});menu.Items.Add("查看K线图",null,async(_,_)=>{if(card.Tag is FuturesQuote current)await OpenFuturesChartAsync(current,"日K线");});card.ContextMenuStrip=menu;foreach(Control child in card.Controls){child.ContextMenuStrip=menu;strip.EnableDrag(child);}card.Disposed+=(_,_)=>menu.Dispose();strip.EnableDrag(card);strip.Controls.Add(card);
             }
             strip.AutoScrollPosition=new Point(Math.Min(scroll,Math.Max(0,strip.DisplayRectangle.Width-strip.ClientSize.Width)),0);
         }
         finally{strip.ResumeLayout();}
+        void UpdateCard(Control control,FuturesQuote item)
+        {
+            control.Tag=item;var color=rising?Color.FromArgb(205,42,42):Color.FromArgb(0,132,67);
+            var name=control.Controls.Find("futureName",true).FirstOrDefault() as Label;var percent=control.Controls.Find("futurePercent",true).FirstOrDefault() as Label;var symbol=control.Controls.Find("futureSymbol",true).FirstOrDefault() as Label;var price=control.Controls.Find("futurePrice",true).FirstOrDefault() as Label;
+            if(name is not null)name.Text=item.Name;if(percent is not null){percent.Text=item.ChangePercent.ToString("+0.00;-0.00;0.00")+"%";percent.ForeColor=color;}if(symbol is not null)symbol.Text=item.Symbol;if(price is not null){price.Text=item.Current.ToString("0.####");price.ForeColor=color;}
+            var ma10Text=_futuresMa10.TryGetValue(item.Symbol,out var ma10)&&ma10>0?$"当前相对MA10：{(item.Current>=ma10?"上方":"下方")} {Math.Abs((item.Current-ma10)/ma10*100):0.00}%":"当前相对MA10：暂无数据";var industryTip=BuildFuturesSectorImpactTip(item.Symbol,rising);var tip=string.Join(Environment.NewLine,new[]{item.Name+"（"+item.Symbol+"）",ma10Text,industryTip}.Where(x=>x.Length>0));_tips.SetToolTip(control,tip);foreach(Control child in control.Controls)_tips.SetToolTip(child,tip);
+        }
+    }
+
+    private static string FormatFuturesImpactTip(string value,bool rising)=>rising
+        ?value.Replace("上涨受益：","利好：",StringComparison.Ordinal).Replace("下游压力：","利空：",StringComparison.Ordinal)
+        :value.Replace("上涨受益：","利空：",StringComparison.Ordinal).Replace("下游压力：","利好：",StringComparison.Ordinal);
+
+    private string BuildFuturesSectorImpactTip(string symbol,bool rising)
+    {
+        var (upstream,downstream)=FuturesImpactKeywords(symbol);var favorable=rising?upstream:downstream;var unfavorable=rising?downstream:upstream;
+        var good=MatchFuturesSectors(favorable);var bad=MatchFuturesSectors(unfavorable);
+        if(good.Count==0&&bad.Count==0)return FormatFuturesImpactTip(FuturesIndustryTip(symbol),rising);
+        var lines=new List<string>();
+        if(good.Count>0){lines.Add("利好板块：");lines.AddRange(good.Select(FormatSector));}
+        if(bad.Count>0){lines.Add("利空板块：");lines.AddRange(bad.Select(FormatSector));}
+        return string.Join(Environment.NewLine,lines);
+        static string FormatSector(SectorChangeItem item)=>$"  {item.Name} {item.ChangePercent:+0.00;-0.00;0.00}%（{item.Type}）";
+    }
+
+    private IReadOnlyList<SectorChangeItem> MatchFuturesSectors(IReadOnlyList<string> keywords)
+    {
+        static string Normalize(string value)=>value.Replace("行业","",StringComparison.Ordinal).Replace("概念","",StringComparison.Ordinal).Replace("板块","",StringComparison.Ordinal).Replace("Ⅱ","",StringComparison.Ordinal).Trim();
+        return _futuresSectorChanges.Where(sector=>keywords.Any(keyword=>{var left=Normalize(sector.Name);var right=Normalize(keyword);return left.Length>=2&&right.Length>=2&&(left.Contains(right,StringComparison.OrdinalIgnoreCase)||right.Contains(left,StringComparison.OrdinalIgnoreCase));}))
+            .OrderByDescending(x=>Math.Abs(x.ChangePercent)).ThenBy(x=>x.Type).Take(4).ToArray();
+    }
+
+    private static (string[] Upstream,string[] Downstream) FuturesImpactKeywords(string symbol)
+    {
+        var code=symbol.ToUpperInvariant().Trim();if(code.EndsWith('0'))code=code[..^1];
+        return code switch
+        {
+            "JM" or "J"=>(["煤炭","煤化工","焦炭"],["钢铁"]),"I"=>(["铁矿石","金属矿产"],["钢铁"]),"RB" or "HC"=>(["钢铁"],["工程建设","房地产","工程机械"]),
+            "LC"=>(["能源金属","锂矿","锂资源"],["电池","新能源汽车","汽车整车"]),"SI"=>(["工业硅"],["有机硅","多晶硅","光伏"]),"SA"=>(["化学原料","纯碱"],["玻璃玻纤","光伏玻璃"]),"FG"=>(["玻璃玻纤","光伏玻璃"],["房地产","汽车零部件"]),
+            "MA"=>(["煤化工","甲醇"],["化纤","塑料制品"]),"UR"=>(["化肥","尿素"],["种植业"]),"SF" or "SM"=>(["小金属","铁合金"],["钢铁"]),
+            "FU" or "BU" or "PG"=>(["石油行业","油气设服","燃气"],["航运港口","工程建设"]),"CU"=>(["工业金属","铜"],["电网设备","家电行业"]),"AL"=>(["工业金属","铝"],["汽车零部件","光伏设备"]),
+            "ZN" or "PB" or "SN"=>(["工业金属","小金属"],["金属制品"]),"NI"=>(["能源金属","镍"],["钢铁","电池"]),"SS"=>(["钢铁","特钢"],["通用设备","金属制品"]),"AU" or "AG"=>(["贵金属","黄金"],["珠宝首饰"]),
+            "RU"=>(["橡胶制品"],["汽车零部件","轮胎"]),"SP"=>(["造纸印刷","纸浆"],["包装材料"]),"C" or "CS"=>(["种植业","玉米"],["食品饮料","饲料"]),"M" or "RM"=>(["农产品加工","油脂"],["饲料","养殖业"]),
+            "A" or "B"=>(["种植业","大豆"],["农产品加工","食品饮料"]),"Y" or "P" or "OI"=>(["农产品加工","食用油"],["食品饮料"]),"LH"=>(["养殖业","猪肉"],["食品加工"]),"JD"=>(["养殖业","鸡肉"],["食品加工"]),
+            "SR"=>(["农产品加工","白糖"],["食品饮料"]),"CF"=>(["种植业","棉花"],["纺织服装"]),"AP" or "CJ" or "PK"=>(["种植业","农业种植"],["食品饮料"]),"TA" or "PF" or "EG"=>(["化纤行业","化工原料"],["纺织服装"]),
+            "EB" or "L" or "PP" or "V"=>(["化学原料","塑料制品"],["包装材料","家电行业"]),"IF" or "IH" or "IC" or "IM"=>(["证券","多元金融"],[]),"T" or "TF" or "TS" or "TL"=>(["银行","保险"],[]),_=>([],[])
+        };
+    }
+
+    private static string FuturesIndustryTip(string symbol)
+    {
+        var code=symbol.ToUpperInvariant().Trim();if(code.EndsWith('0'))code=code[..^1];
+        return code switch
+        {
+            "JM"=>"关联板块：焦煤、煤炭开采、焦化、钢铁\r\n上涨受益：焦煤资源企业；下游压力：焦化、钢铁",
+            "J"=>"关联板块：焦化、煤炭、钢铁\r\n上涨受益：焦炭生产企业；下游压力：钢铁",
+            "I"=>"关联板块：铁矿石、钢铁、港口贸易\r\n上涨受益：矿山资源端；下游压力：钢铁",
+            "RB" or "HC"=>"关联板块：钢铁、基建、房地产、机械\r\n上涨受益：钢材生产端；下游压力：基建施工、机械制造",
+            "LC"=>"关联板块：锂矿、锂盐、锂电池、新能源汽车\r\n上涨受益：锂矿与锂盐；下游压力：电池、整车",
+            "SI"=>"关联板块：工业硅、有机硅、多晶硅、光伏\r\n上涨受益：工业硅生产端；下游压力：有机硅、光伏材料",
+            "SA"=>"关联板块：纯碱、基础化工、玻璃、光伏玻璃\r\n上涨受益：纯碱生产端；下游压力：玻璃制造",
+            "FG"=>"关联板块：玻璃、房地产、汽车、光伏玻璃\r\n上涨受益：玻璃生产端；下游压力：建筑、汽车深加工",
+            "MA"=>"关联板块：煤化工、甲醇、烯烃、醋酸、甲醛\r\n上涨受益：甲醇生产端；下游压力：甲醇制烯烃等",
+            "UR"=>"关联板块：化肥、煤化工、农业种植\r\n上涨受益：尿素生产端；下游压力：农业种植",
+            "SF" or "SM"=>"关联板块：铁合金、钢铁、矿产资源\r\n上涨受益：铁合金生产端；下游压力：钢铁",
+            "FU" or "BU"=>"关联板块：石油炼化、油气、航运、基建\r\n上涨受益：炼化与油气端；下游压力：航运、道路施工",
+            "PG"=>"关联板块：液化气、石油化工、燃气\r\n上涨受益：上游油气与炼化；下游压力：化工、燃气运营",
+            "CU"=>"关联板块：铜矿、有色冶炼、电力设备、家电\r\n上涨受益：铜矿资源端；下游压力：电缆、家电、制造业",
+            "AL"=>"关联板块：铝土矿、电解铝、汽车、光伏\r\n上涨受益：铝资源与电解铝；下游压力：铝加工制造",
+            "ZN" or "PB" or "SN"=>"关联板块：有色矿产、金属冶炼、工业制造\r\n上涨受益：矿山与冶炼端；下游压力：金属加工端",
+            "NI"=>"关联板块：镍矿、有色冶炼、不锈钢、三元电池\r\n上涨受益：镍资源与冶炼；下游压力：不锈钢、电池",
+            "SS"=>"关联板块：不锈钢、特钢、金属制品、机械\r\n上涨受益：不锈钢生产端；下游压力：机械与金属制品",
+            "AU" or "AG"=>"关联板块：贵金属、黄金白银采选、珠宝\r\n上涨受益：贵金属资源企业；下游压力：珠宝与工业用银",
+            "RU"=>"关联板块：橡胶、轮胎、汽车零部件\r\n上涨受益：橡胶资源端；下游压力：轮胎与橡胶制品",
+            "SP"=>"关联板块：纸浆、造纸、包装印刷\r\n上涨受益：浆纸一体化企业；下游压力：造纸与包装",
+            "C" or "CS"=>"关联板块：玉米种植、玉米深加工、食品、饲料\r\n上涨受益：种植与加工售价；下游压力：食品、饲料",
+            "M" or "RM"=>"关联板块：油脂加工、饲料、水产与生猪养殖\r\n上涨受益：粕类加工端；下游压力：饲料与养殖",
+            "A" or "B"=>"关联板块：大豆种植、油脂加工、食品、饲料\r\n上涨受益：大豆资源端；下游压力：压榨与食品加工",
+            "Y" or "P" or "OI"=>"关联板块：食用油、油脂加工、食品消费\r\n上涨受益：油脂生产与库存端；下游压力：食品加工",
+            "LH"=>"关联板块：生猪养殖、饲料、肉制品\r\n上涨受益：养殖企业售价；下游压力：屠宰与肉制品",
+            "JD"=>"关联板块：蛋鸡养殖、饲料、食品加工\r\n上涨受益：养殖端；下游压力：食品加工",
+            "SR"=>"关联板块：制糖、农业种植、食品饮料\r\n上涨受益：糖业企业；下游压力：食品饮料",
+            "CF"=>"关联板块：棉花种植、纺织、服装\r\n上涨受益：棉花资源端；下游压力：纺织服装",
+            "AP" or "CJ" or "PK"=>"关联板块：农业种植、农产品加工、食品消费\r\n上涨受益：种植与库存端；下游压力：食品加工",
+            "TA" or "PF"=>"关联板块：PTA、涤纶、化纤、纺织服装\r\n上涨受益：化纤原料生产端；下游压力：纺织服装",
+            "EG"=>"关联板块：乙二醇、聚酯、化纤\r\n上涨受益：乙二醇生产端；下游压力：聚酯化纤",
+            "EB"=>"关联板块：苯乙烯、塑料、家电、汽车零部件\r\n上涨受益：苯乙烯生产端；下游压力：塑料制品",
+            "L" or "PP" or "V"=>"关联板块：塑料、石油化工、包装、建材\r\n上涨受益：化工原料端；下游压力：塑料制品与包装",
+            "IF" or "IH" or "IC" or "IM"=>"关联板块：A股指数成分股、券商、股指衍生品\r\n反映对应大中小盘指数整体预期，不对应单一产业链",
+            "T" or "TF" or "TS" or "TL"=>"关联板块：国债、银行、保险、高股息资产\r\n上涨通常对应市场利率下行预期，需结合期限与政策判断",
+            _=>"关联板块：暂无明确产业链映射"
+        };
     }
 
     private async Task OpenSelectedFuturesChartAsync(ContextMenuStrip menu,string chartType)
@@ -643,7 +750,7 @@ public sealed class SettingsForm : Form
                     .GroupBy(x=>string.IsNullOrWhiteSpace(x.PrimaryIndustry)?string.IsNullOrWhiteSpace(x.IndustryBoard)?"未分类":x.IndustryBoard.Trim():x.PrimaryIndustry.Trim(),StringComparer.OrdinalIgnoreCase)
                     .OrderByDescending(x=>x.Count()).ThenBy(x=>x.Key,StringComparer.CurrentCulture))AddSection($"{group.Key}\r\n({group.Count()})",group);
             }
-            else foreach(var group in _limitUpItems.GroupBy(x=>x.ConsecutiveBoards).OrderByDescending(x=>x.Key))AddSection(group.Key<=1?$"首板\r\n({group.Count()})":$"{group.Key}板",group);
+            else foreach(var group in _limitUpItems.GroupBy(x=>x.ConsecutiveBoards).OrderByDescending(x=>x.Key))AddSection(group.Key<=1?$"首板\r\n({group.Count(x=>!x.IsPreviousLimitUpFailure)})":$"{group.Key}板",group);
 
             void AddSection(string title,IEnumerable<LimitUpLadderItem> source)
             {

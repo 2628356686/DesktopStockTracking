@@ -60,7 +60,7 @@ public sealed class AppSettings
     public void Normalize()
     {
         RefreshSeconds = Math.Clamp(RefreshSeconds, 1, 10);
-        FontSize = Math.Clamp(FontSize, 8, 28);
+        FontSize = Math.Clamp(FontSize, 6, 28);
         OpacityPercent = Math.Clamp(OpacityPercent, 20, 100);
         RowSpacing = Math.Clamp(RowSpacing, 0, 16);
         CodeDisplayMode = Math.Clamp(CodeDisplayMode, 0, 3);

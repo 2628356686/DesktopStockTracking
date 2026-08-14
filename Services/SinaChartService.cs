@@ -12,6 +12,16 @@ public sealed class SinaChartService : IDisposable
     public SinaChartService(){_client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 StockTickerLite/1.0");}
     public async Task<IReadOnlyList<IntradayPoint>> GetChartAsync(string code,string chartType,CancellationToken cancellationToken=default)
     {
+        if(chartType=="分时图")
+        {
+            try
+            {
+                var exchange=await GetExchangeIntradayAsync(code,cancellationToken);
+                if(exchange.Count>1)return exchange;
+            }
+            catch(OperationCanceledException){throw;}
+            catch{ /* 交易所网页行情不可用时继续使用新浪分时 */ }
+        }
         var scale=chartType switch{"5分钟"=>5,"15分钟"=>15,"30分钟"=>30,"60分钟"=>60,"日K线"=>240,"周K线"=>1200,"月K线"=>7200,_=>1};
         var length=scale==1?300:chartType=="日K线"?450:260;
         var symbol=StockCode.Normalize(code);var url=$"cn/api/json_v2.php/CN_MarketDataService.getKLineData?symbol={Uri.EscapeDataString(symbol)}&scale={scale}&ma=no&datalen={length}";
@@ -35,6 +45,54 @@ public sealed class SinaChartService : IDisposable
         return calculated;
         decimal? Ma(int index,int period){if(index+1<period)return null;decimal sum=0;for(var j=index-period+1;j<=index;j++)sum+=calculationSource[j].Close;return sum/period;}
     }
+
+    private async Task<IReadOnlyList<IntradayPoint>> GetExchangeIntradayAsync(string code,CancellationToken cancellationToken)
+    {
+        var symbol=StockCode.Normalize(code);if(symbol.Length<8)return [];
+        return symbol.StartsWith("sh",StringComparison.OrdinalIgnoreCase)
+            ?await GetSseIntradayAsync(symbol[2..],cancellationToken)
+            :symbol.StartsWith("sz",StringComparison.OrdinalIgnoreCase)?await GetSzseIntradayAsync(symbol[2..],cancellationToken):[];
+    }
+
+    private async Task<IReadOnlyList<IntradayPoint>> GetSseIntradayAsync(string code,CancellationToken cancellationToken)
+    {
+        var url=$"https://yunhq.sse.com.cn:32042/v1/sh1/line/{Uri.EscapeDataString(code)}?begin=0&end=-1&select=time%2Cprice%2Cvolume";
+        using var request=new HttpRequestMessage(HttpMethod.Get,url);request.Headers.Referrer=new Uri("https://www.sse.com.cn/");
+        using var response=await _client.SendAsync(request,cancellationToken);response.EnsureSuccessStatusCode();using var json=JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        if(!json.RootElement.TryGetProperty("line",out var lines)||lines.ValueKind!=JsonValueKind.Array)return [];
+        var dateText=json.RootElement.TryGetProperty("date",out var dateValue)?dateValue.ToString():DateTime.Today.ToString("yyyyMMdd",CultureInfo.InvariantCulture);
+        if(!DateTime.TryParseExact(dateText,"yyyyMMdd",CultureInfo.InvariantCulture,DateTimeStyles.None,out var date))date=DateTime.Today;
+        var result=new List<IntradayPoint>();long totalVolume=0;decimal weighted=0;
+        foreach(var line in lines.EnumerateArray())
+        {
+            var values=line.EnumerateArray().ToArray();if(values.Length<3)continue;var time=values[0].ToString().PadLeft(6,'0');
+            if(!DateTime.TryParseExact(date.ToString("yyyyMMdd",CultureInfo.InvariantCulture)+time,"yyyyMMddHHmmss",CultureInfo.InvariantCulture,DateTimeStyles.None,out var timestamp))continue;
+            var price=ElementDecimal(values[1]);var volume=ElementLong(values[2]);if(price<=0)continue;totalVolume+=volume;weighted+=price*volume;var average=totalVolume>0?weighted/totalVolume:price;
+            result.Add(new IntradayPoint(timestamp,price,price,price,price,volume,price*volume,average));
+        }
+        return result;
+    }
+
+    private async Task<IReadOnlyList<IntradayPoint>> GetSzseIntradayAsync(string code,CancellationToken cancellationToken)
+    {
+        var url=$"https://www.szse.cn/api/market/ssjjhq/getTimeData?marketId=1&code={Uri.EscapeDataString(code)}&random={Random.Shared.NextDouble().ToString(CultureInfo.InvariantCulture)}";
+        using var request=new HttpRequestMessage(HttpMethod.Get,url);request.Headers.Referrer=new Uri($"https://www.szse.cn/market/trend/index.html?code={code}");
+        using var response=await _client.SendAsync(request,cancellationToken);response.EnsureSuccessStatusCode();using var json=JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        if(!json.RootElement.TryGetProperty("data",out var data)||!data.TryGetProperty("picupdata",out var lines)||lines.ValueKind!=JsonValueKind.Array)return [];
+        var date=DateTime.Today;if(data.TryGetProperty("marketTime",out var marketTime)&&DateTime.TryParse(marketTime.GetString(),CultureInfo.InvariantCulture,DateTimeStyles.None,out var parsed))date=parsed.Date;
+        var result=new List<IntradayPoint>();long previousVolume=0;decimal previousAmount=0;
+        foreach(var line in lines.EnumerateArray())
+        {
+            if(line.ValueKind!=JsonValueKind.Array)continue;var values=line.EnumerateArray().ToArray();if(values.Length<7||!TimeSpan.TryParse(values[0].GetString(),CultureInfo.InvariantCulture,out var time))continue;
+            var price=ElementDecimal(values[1]);var average=ElementDecimal(values[2]);var cumulativeVolume=ElementLong(values[5])*100;var cumulativeAmount=ElementDecimal(values[6]);if(price<=0)continue;
+            var volume=Math.Max(0,cumulativeVolume-previousVolume);var amount=Math.Max(0,cumulativeAmount-previousAmount);previousVolume=cumulativeVolume;previousAmount=cumulativeAmount;
+            result.Add(new IntradayPoint(date+time,price,price,price,price,volume,amount,average>0?average:price));
+        }
+        return result;
+    }
+
+    private static decimal ElementDecimal(JsonElement value)=>value.ValueKind==JsonValueKind.Number&&value.TryGetDecimal(out var number)?number:decimal.TryParse(value.ToString(),NumberStyles.Any,CultureInfo.InvariantCulture,out number)?number:0;
+    private static long ElementLong(JsonElement value)=>value.ValueKind==JsonValueKind.Number&&value.TryGetInt64(out var number)?number:long.TryParse(value.ToString(),NumberStyles.Any,CultureInfo.InvariantCulture,out number)?number:0;
     private static bool TryDate(JsonElement e,string name,out DateTime value){value=default;return e.TryGetProperty(name,out var p)&&DateTime.TryParse(p.GetString(),CultureInfo.InvariantCulture,DateTimeStyles.None,out value);}
     private static bool TryDecimal(JsonElement e,string name,out decimal value){value=0;return e.TryGetProperty(name,out var p)&&decimal.TryParse(p.GetString(),NumberStyles.Any,CultureInfo.InvariantCulture,out value);}
     private static bool TryLong(JsonElement e,string name,out long value){value=0;return e.TryGetProperty(name,out var p)&&long.TryParse(p.GetString(),NumberStyles.Any,CultureInfo.InvariantCulture,out value);}
