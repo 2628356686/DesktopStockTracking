@@ -80,7 +80,7 @@ public sealed class MainForm : Form
         _rows.AutoSize=true; _rows.AutoSizeMode=AutoSizeMode.GrowAndShrink; _rows.FlowDirection=FlowDirection.TopDown; _rows.WrapContents=false; _rows.Margin=Padding.Empty;
         _status.AutoSize=true; _status.ForeColor=Color.DimGray; _status.Margin=new Padding(1,3,1,0);
         var root=new FlowLayoutPanel{AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,FlowDirection=FlowDirection.TopDown,WrapContents=false,Margin=Padding.Empty,Padding=Padding.Empty};root.Controls.Add(_rows);root.Controls.Add(_status);Controls.Add(root);
-        BuildMenu(); AssignMenu(root); _tray.Icon=SystemIcons.Application;_tray.Text="轻量桌面盯盘";_tray.ContextMenuStrip=_menu;_tray.DoubleClick+=(_,_)=>ToggleVisible();
+        BuildMenu(); AssignMenu(root); var applicationIcon=Icon.ExtractAssociatedIcon(Application.ExecutablePath)??SystemIcons.Application;Icon=applicationIcon;_tray.Icon=applicationIcon;_tray.Text="轻量桌面盯盘";_tray.ContextMenuStrip=_menu;_tray.DoubleClick+=(_,_)=>ToggleVisible();
         _timer.Tick+=async(_,_)=>await RefreshAsync(); MouseDown+=BeginDrag;MouseMove+=Drag;MouseUp+=EndDrag;root.MouseDown+=BeginDrag;root.MouseMove+=Drag;root.MouseUp+=EndDrag;
         ApplySettings(true); Shown+=async(_,_)=>await RefreshAsync();
     }

@@ -148,8 +148,10 @@ bin\Release\net9.0-windows\
 如果需要生成可发送给其他 Windows 64位电脑使用、无需另外安装 .NET 的版本，执行：
 
 ```powershell
-dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
+dotnet publish -p:PublishProfile=WinX64SelfContained
 ```
+
+该发布配置会将 .NET 运行环境和原生依赖一并打包，目标电脑无需安装 .NET，解压后可直接运行 `StockTickerLite.exe`。
 
 发布结果位于：
 

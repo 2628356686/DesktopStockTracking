@@ -8,5 +8,6 @@
     <AssemblyName>StockTickerLite</AssemblyName>
     <RootNamespace>StockTickerLite</RootNamespace>
     <Version>1.3.0</Version>
+    <ApplicationIcon>Assets\StockTickerLite.ico</ApplicationIcon>
   </PropertyGroup>
 </Project>
