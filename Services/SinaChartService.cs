@@ -8,7 +8,7 @@ public sealed record IntradayPoint(DateTime Time,decimal Open,decimal High,decim
 
 public sealed class SinaChartService : IDisposable
 {
-    private readonly HttpClient _client=new(){BaseAddress=new Uri("https://quotes.sina.cn/"),Timeout=TimeSpan.FromSeconds(10)};
+    private readonly HttpClient _client=DirectHttpClient.Create(TimeSpan.FromSeconds(10),"https://quotes.sina.cn/");
     public SinaChartService(){_client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 StockTickerLite/1.0");}
     public async Task<IReadOnlyList<IntradayPoint>> GetChartAsync(string code,string chartType,CancellationToken cancellationToken=default)
     {

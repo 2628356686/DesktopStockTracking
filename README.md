@@ -150,13 +150,20 @@ bin\Release\net9.0-windows\
 如果需要生成可发送给其他 Windows 64位电脑使用、无需另外安装 .NET 的版本，执行：
 
 ```powershell
-dotnet publish -p:PublishProfile=WinX64SelfContained
+.\tools\build.cmd
 ```
 
-该发布配置会将 .NET 运行环境和原生依赖一并打包，目标电脑无需安装 .NET，解压后可直接运行 `StockTickerLite.exe`。
+该脚本会尝试关闭从 `public` 输出目录启动的旧版程序、清理旧的 Release 构建、使用 `WinX64SelfContained` 发布配置生成单文件程序，并自动创建 ZIP 压缩包。如果文件仍被其他程序占用，脚本会在清理阶段给出明确提示并停止。构建和还原过程中不会使用代理环境变量。
 
-发布结果位于：
+发布结果分别位于：
 
 ```text
-bin\Release\net9.0-windows\win-x64\publish\
+public\win-x64\StockTickerLite.exe
+public\StockTickerLite-win-x64.zip
+```
+
+也可以只执行原始发布命令：
+
+```powershell
+dotnet publish -p:PublishProfile=WinX64SelfContained
 ```

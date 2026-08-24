@@ -15,11 +15,9 @@ public sealed class SinaStockSearchService : IDisposable
 
     public SinaStockSearchService()
     {
-        _client = new HttpClient(new HttpClientHandler { AutomaticDecompression = DecompressionMethods.All })
-        {
-            BaseAddress = new Uri("https://suggest3.sinajs.cn/suggest/"),
-            Timeout = TimeSpan.FromSeconds(6)
-        };
+        _client = DirectHttpClient.Create(
+            TimeSpan.FromSeconds(6),
+            "https://suggest3.sinajs.cn/suggest/");
         _client.DefaultRequestHeaders.Referrer = new Uri("https://finance.sina.com.cn/");
         _client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 StockTickerLite/1.0");
     }

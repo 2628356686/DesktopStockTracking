@@ -14,7 +14,7 @@ public sealed class SinaFuturesService:IDisposable
         "SR0","CF0","TA0","MA0","RM0","OI0","FG0","SA0","UR0","AP0","CJ0","PK0","PF0","SH0","SM0","SF0",
         "SI0","LC0","IF0","IH0","IC0","IM0","T0","TF0","TS0","TL0"
     ];
-    private readonly HttpClient _client=new(){Timeout=TimeSpan.FromSeconds(15)};
+    private readonly HttpClient _client=DirectHttpClient.Create(TimeSpan.FromSeconds(15));
 
     public SinaFuturesService()
     {

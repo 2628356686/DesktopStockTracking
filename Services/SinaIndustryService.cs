@@ -15,15 +15,9 @@ public sealed class SinaIndustryService : IDisposable
 
     public SinaIndustryService()
     {
-        var handler = new HttpClientHandler
-        {
-            AutomaticDecompression = DecompressionMethods.All
-        };
-        _client = new HttpClient(handler)
-        {
-            BaseAddress = new Uri("https://vip.stock.finance.sina.com.cn/"),
-            Timeout = TimeSpan.FromSeconds(8)
-        };
+        _client = DirectHttpClient.Create(
+            TimeSpan.FromSeconds(8),
+            "https://vip.stock.finance.sina.com.cn/");
         _client.DefaultRequestHeaders.Referrer =
             new Uri("https://vip.stock.finance.sina.com.cn/mkt/frames/sl_bk.html");
         _client.DefaultRequestHeaders.UserAgent.ParseAdd(

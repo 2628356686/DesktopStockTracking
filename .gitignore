@@ -1,6 +1,7 @@
 bin/
 obj/
 publish/
+public/
 .vs/
 .idea/
 *.user

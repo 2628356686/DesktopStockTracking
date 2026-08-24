@@ -24,7 +24,7 @@ public sealed class SinaRankingService : IDisposable
 
     public SinaRankingService()
     {
-        _client = new HttpClient { Timeout = TimeSpan.FromSeconds(12) };
+        _client = DirectHttpClient.Create(TimeSpan.FromSeconds(12));
         _client.DefaultRequestHeaders.Referrer = new Uri("https://finance.sina.com.cn/");
         _client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 DesktopStockTracking/1.0");
     }

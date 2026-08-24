@@ -15,15 +15,9 @@ public sealed partial class SinaQuoteService : IDisposable
 
     public SinaQuoteService()
     {
-        var handler = new HttpClientHandler
-        {
-            AutomaticDecompression = DecompressionMethods.All
-        };
-        _client = new HttpClient(handler)
-        {
-            BaseAddress = new Uri("https://hq.sinajs.cn/"),
-            Timeout = TimeSpan.FromSeconds(8)
-        };
+        _client = DirectHttpClient.Create(
+            TimeSpan.FromSeconds(8),
+            "https://hq.sinajs.cn/");
         _client.DefaultRequestHeaders.Referrer = new Uri("https://finance.sina.com.cn/");
         _client.DefaultRequestHeaders.UserAgent.ParseAdd(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) StockTickerLite/1.0");
