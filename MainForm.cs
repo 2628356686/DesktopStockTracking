@@ -98,6 +98,7 @@ public sealed class MainForm : Form
 
     private void ApplySettings(bool reposition)
     {
+        try{StartupManager.SetEnabled(_settings.StartWithWindows);}catch(Exception ex){if(!reposition)MessageBox.Show(this,"开机启动设置失败："+ex.Message,"设置",MessageBoxButtons.OK,MessageBoxIcon.Warning);}
         _timer.Interval=_settings.RefreshSeconds*1000;_timer.Start();TopMost=_settings.AlwaysOnTop;Opacity=_settings.TransparentBackground?1d:_settings.OpacityPercent/100d;
         var previousFont=_rowFont;try{_rowFont=new Font(_settings.FontFamily,_settings.FontSize,FontStyle.Regular);}catch{_rowFont=new Font("Microsoft YaHei UI",_settings.FontSize,FontStyle.Regular);}Font=_rowFont;previousFont?.Dispose();_rowsNeedRebuild=true;
         var selectedBg=Color.FromArgb(_settings.BackgroundColorArgb);var renderBg=_settings.TransparentBackground?Color.FromArgb(2,1,1):selectedBg;BackColor=renderBg;_rows.BackColor=renderBg;foreach(Control child in Controls)child.BackColor=renderBg;TransparencyKey=_settings.TransparentBackground?renderBg:Color.Empty;_tray.Visible=_settings.ShowTrayIcon;
