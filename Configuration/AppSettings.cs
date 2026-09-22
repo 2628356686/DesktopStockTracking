@@ -7,6 +7,7 @@ public sealed class AppSettings
     public int RefreshSeconds { get; set; } = 3;
     public bool AlwaysOnTop { get; set; } = true;
     public bool ShowTrayIcon { get; set; } = true;
+    public bool StartWithWindows { get; set; }
     public bool TransparentBackground { get; set; }
     public int OpacityPercent { get; set; } = 100;
     public float FontSize { get; set; } = 11;
